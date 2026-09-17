@@ -1,3 +1,5 @@
+import { surfaceM } from './geo.js';
+
 const MAX_ARTICLES = 5;
 
 function cleanText(value, maxLength = 180) {
@@ -143,12 +145,9 @@ export function regionalDistanceM(from, to) {
   ) {
     return Infinity;
   }
-  const phi1 = (from.latitude * Math.PI) / 180;
-  const phi2 = (to.latitude * Math.PI) / 180;
-  const deltaPhi = ((to.latitude - from.latitude) * Math.PI) / 180;
-  const deltaLambda = ((to.longitude - from.longitude) * Math.PI) / 180;
-  const a =
-    Math.sin(deltaPhi / 2) ** 2 +
-    Math.cos(phi1) * Math.cos(phi2) * Math.sin(deltaLambda / 2) ** 2;
-  return 6371000 * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  // Reported to the user in the cockpit brief, so it takes the canonical
+  // authority: the previous local copy used an older rounded radius and an
+  // atan2(h) form that can return NaN when floating point pushes the
+  // haversine term just above 1.
+  return surfaceM(from.latitude, from.longitude, to.latitude, to.longitude);
 }

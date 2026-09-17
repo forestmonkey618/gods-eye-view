@@ -1,4 +1,5 @@
 import * as Cesium from 'cesium';
+import { EARTH_RADIUS_M, surfaceM } from '../../data/geo.js';
 import { staticFrameRefreshMs } from '../../data/cctvLod.js';
 import { frameFetchDue, cardFetchPolicy } from '../../data/cctvCards.js';
 import { DEFAULT_CAMERA_CALIBRATION } from './policy.js';
@@ -259,7 +260,8 @@ export function createModel({ state: layerState, services, parts, source }) {
 
   /**
    * Projects a point along a bearing from a given lat/lon by a distance.
-   * Uses the spherical-earth direct geodesic formula (R = 6371 km).
+   * Uses the spherical-earth direct geodesic formula, with the canonical
+   * radius from `data/geo.js`.
    * @param {number} latDeg - Origin latitude (degrees).
    * @param {number} lonDeg - Origin longitude (degrees).
    * @param {number} bearingDeg - Azimuth from north (degrees).
@@ -268,7 +270,7 @@ export function createModel({ state: layerState, services, parts, source }) {
    */
 
   function projectPoint(latDeg, lonDeg, bearingDeg, distanceM) {
-    const angular = distanceM / 6371000;
+    const angular = distanceM / EARTH_RADIUS_M;
     const bearing = toRad(bearingDeg);
     const lat1 = toRad(latDeg);
     const lon1 = toRad(lonDeg);
@@ -298,12 +300,7 @@ export function createModel({ state: layerState, services, parts, source }) {
    */
 
   function haversineKm(lat1, lon1, lat2, lon2) {
-    const dLat = toRad(lat2 - lat1);
-    const dLon = toRad(lon2 - lon1);
-    const a =
-      Math.sin(dLat / 2) ** 2 +
-      Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2;
-    return 6371 * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    return surfaceM(lat1, lon1, lat2, lon2) / 1000;
   }
 
   /**

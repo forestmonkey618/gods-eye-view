@@ -16,6 +16,7 @@
  * next lookup rather than cached (see `createRetryableLoader`).
  */
 
+import { ringContains, surfaceM } from './geo.js';
 import { createRetryableLoader } from './retryableLoad.js';
 
 const EARTH_RADIUS_KM = 6371;
@@ -35,13 +36,17 @@ function ringAreaKm2(ring) {
   return Math.abs((sum * EARTH_RADIUS_KM * EARTH_RADIUS_KM) / 2);
 }
 
-function haversineKm(lon1, lat1, lon2, lat2) {
-  const dLat = toRad(lat2 - lat1);
-  const dLon = toRad(lon2 - lon1);
-  const h =
-    Math.sin(dLat / 2) ** 2 +
-    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2;
-  return 2 * EARTH_RADIUS_KM * Math.asin(Math.min(1, Math.sqrt(h)));
+/**
+ * Great-circle distance in km between two points, `(lat, lon)` order.
+ *
+ * Delegates to `data/geo.js`. This helper previously took `(lon, lat, ...)` —
+ * the only longitude-first signature in the repository — which meant a call
+ * copied between it and any other module silently swapped latitude and
+ * longitude for a plausible-looking wrong answer. The order is now the
+ * repository-wide one.
+ */
+function distanceKm(lat1, lon1, lat2, lon2) {
+  return surfaceM(lat1, lon1, lat2, lon2) / 1000;
 }
 
 /**
@@ -162,7 +167,7 @@ function buildEntries(pack, kind) {
       polygons,
       areaKm2,
       bbox: [minLon, minLat, maxLon, maxLat],
-      bboxDiagonalKm: haversineKm(minLon, minLat, maxLon, maxLat),
+      bboxDiagonalKm: distanceKm(minLat, minLon, maxLat, maxLon),
     });
   }
   return out;
@@ -266,16 +271,7 @@ export { normalizeName as _normalizeName };
  * @returns {boolean}
  */
 export function pointInRing(ring, lat, lon) {
-  if (!Array.isArray(ring) || ring.length < 3) return false;
-  let inside = false;
-  for (let i = 0, j = ring.length - 1; i < ring.length; j = i, i += 1) {
-    const [xi, yi] = ring[i];
-    const [xj, yj] = ring[j];
-    const intersects =
-      yi > lat !== yj > lat && lon < ((xj - xi) * (lat - yi)) / (yj - yi) + xi;
-    if (intersects) inside = !inside;
-  }
-  return inside;
+  return ringContains(ring, lat, lon);
 }
 
 /**

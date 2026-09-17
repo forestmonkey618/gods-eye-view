@@ -24,6 +24,7 @@
  * @module data/analystEngine
  */
 
+import { surfaceM } from './geo.js';
 import { pointInRing } from './naturalEarthRegions.js';
 
 /** Layers the engine understands, with the fields queries may reference. */
@@ -63,17 +64,17 @@ export const ANALYST_LAYERS = {
   },
 };
 
-const EARTH_R_KM = 6371;
 
 /** Great-circle distance in km. */
+/**
+ * Great-circle distance in km, `(lat, lon)` order.
+ *
+ * Delegates to `data/geo.js` so the analyst cannot disagree with any other
+ * surface about how far apart two points are. The name is retained for
+ * callers; the distance is the canonical SURFACE metric.
+ */
 export function haversineKm(lat1, lon1, lat2, lon2) {
-  const d2r = Math.PI / 180;
-  const dLat = (lat2 - lat1) * d2r;
-  const dLon = (lon2 - lon1) * d2r;
-  const a =
-    Math.sin(dLat / 2) ** 2 +
-    Math.cos(lat1 * d2r) * Math.cos(lat2 * d2r) * Math.sin(dLon / 2) ** 2;
-  return 2 * EARTH_R_KM * Math.asin(Math.min(1, Math.sqrt(a)));
+  return surfaceM(lat1, lon1, lat2, lon2) / 1000;
 }
 
 /** One filter: {field, op:'gt'|'lt'|'gte'|'lte'|'eq'|'neq'|'contains', value}. */

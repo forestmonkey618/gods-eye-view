@@ -167,6 +167,7 @@
       "server/providers/places/google-key.js",
       "scripts/google-server-key.mjs",
       "src/data/cctvFootprint.js",
+      "src/data/geo.js",
       "src/sources/cctvTypes.js",
       "src/sources/httpBody.js"
     ],
@@ -245,6 +246,7 @@
       "server/providers/regional/query.js",
       "server/providers/regional/weather-effects.js",
       "server/providers/regional/weather.js",
+      "src/data/geo.js",
       "src/data/regionalModel.js",
       "src/nominatimGeocode.js",
       "src/sources/httpBody.js",
@@ -290,6 +292,7 @@
   "place-search": {
     "exports": ["./search"],
     "modules": [
+      "src/data/geo.js",
       "src/search/index.js",
       "src/search/placeSearch.js",
       "src/search/google.js",
@@ -707,6 +710,7 @@
       "src/data/cockpitAirLod.js",
       "src/data/cockpitContactDot.js",
       "src/data/contactMatch.js",
+      "src/data/geo.js",
       "src/data/iconOrientation.js",
       "src/data/layerState.js",
       "src/data/modelVisualAnchor.js",
@@ -780,6 +784,7 @@
       "src/data/cockpitAirLod.js",
       "src/data/cockpitContactDot.js",
       "src/data/contactMatch.js",
+      "src/data/geo.js",
       "src/data/iconOrientation.js",
       "src/data/layerState.js",
       "src/data/modelVisualAnchor.js",
@@ -951,6 +956,7 @@
     "modules": [
       "src/data/cameraSensitivity.js",
       "src/data/flowMatch.js",
+      "src/data/geo.js",
       "src/data/tomtomTiles.js",
       "src/data/trafficBounds.js",
       "src/data/trafficFlowStyle.js",
@@ -979,6 +985,7 @@
   "bikeshare-layer": {
     "exports": ["./layers/bikeshare"],
     "modules": [
+      "src/data/geo.js",
       "src/layers/bikeshare/controls.js",
       "src/layers/bikeshare/index.js",
       "src/layers/bikeshare/ingestion.js",
@@ -1005,6 +1012,7 @@
       "src/data/cctvGizmo.js",
       "src/data/cctvLod.js",
       "src/data/cctvViewshed.js",
+      "src/data/geo.js",
       "src/data/iconOrientation.js",
       "src/data/trackingClickGesture.js",
       "src/layers/cctv/calibration.js",
@@ -1114,6 +1122,7 @@
   "geography": {
     "exports": ["./geography/natural-earth", "./geography/neighborhoods"],
     "modules": [
+      "src/data/geo.js",
       "src/data/naturalEarthRegions.js",
       "src/data/neighborhoodPolygons.js",
       "src/data/retryableLoad.js",
@@ -1200,6 +1209,7 @@
       "./standalone/catalog"
     ],
     "modules": [
+      "src/data/geo.js",
       "src/scenes/nepalEvidencePack.js",
       "src/data/bhoteKoshiEvent.js",
       "src/data/bhoteKoshiEmbeddedMedia.js",
@@ -1854,6 +1864,7 @@
       "src/app/layers/satellites.js",
       "src/app/layers/submarineCables.js",
       "src/app/layers/traffic.js",
+      "src/data/geo.js",
       "src/sources/sourceSlot.js",
       "src/cctvFocusRequest.js",
       "src/celestialRing.js",
@@ -2220,6 +2231,7 @@
       "src/annotations/annotationResolver.js",
       "src/annotations/resolver.js",
       "src/app/operations.js",
+      "src/data/geo.js",
       "src/sources/sourceSlot.js",
       "src/app/surfaceServices.js",
       "src/data/dataCredits.js",
@@ -2405,7 +2417,10 @@
   },
   "regional-source": {
     "exports": ["./sources/regional"],
-    "modules": ["src/data/regionalModel.js"],
+    "modules": [
+      "src/data/geo.js",
+      "src/data/regionalModel.js"
+    ],
     "external": []
   },
   "voice-action-schemas": {
@@ -2506,6 +2521,7 @@
   "nominatim-provider": {
     "exports": ["./search/nominatim"],
     "modules": [
+      "src/data/geo.js",
       "src/search/nominatim.js",
       "src/nominatimGeocode.js",
       "src/search/google.js",
@@ -2529,6 +2545,7 @@
   "nominatim-source": {
     "exports": ["./sources/nominatim"],
     "modules": [
+      "src/data/geo.js",
       "src/sources/nominatim.js",
       "src/nominatimGeocode.js",
       "src/search/geospatial.js",
@@ -2545,6 +2562,7 @@
       "server/providers/common/rate-limit.js",
       "server/providers/transit.js",
       "server/providers/transitHistory.js",
+      "src/data/geo.js",
       "src/data/gtfsRealtime.js",
       "src/data/transitFeeds.js",
       "src/data/transitProxy.js",
@@ -2559,6 +2577,7 @@
   "transit-source": {
     "exports": ["./sources/transit"],
     "modules": [
+      "src/data/geo.js",
       "src/data/gtfsRealtime.js",
       "src/data/transitFeeds.js",
       "src/data/transitProxy.js",
@@ -2577,6 +2596,7 @@
       "src/data/dataCredits.js",
       "src/data/detectionCohort.js",
       "src/data/detectionPolicy.js",
+      "src/data/geo.js",
       "src/data/geoid.js",
       "src/data/groundFloor.js",
       "src/data/gtfsRealtime.js",
@@ -2629,6 +2649,7 @@
   "transit-layer": {
     "exports": ["./layers/transit"],
     "modules": [
+      "src/data/geo.js",
       "src/data/iconOrientation.js",
       "src/data/inputOwnership.js",
       "src/data/transitFeeds.js",
@@ -2674,6 +2695,7 @@
   "transit-service": {
     "exports": ["./sources/transit-service"],
     "modules": [
+      "src/data/geo.js",
       "src/data/transitFeeds.js",
       "src/data/transitProxy.js",
       "src/data/gtfsRealtime.js",
