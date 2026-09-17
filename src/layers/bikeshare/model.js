@@ -1,3 +1,4 @@
+import { surfaceM } from '../../data/geo.js';
 export function createModel({ state: layerState, services, parts, source }) {
   /**
    * Coerce a GBFS boolean field to a native boolean.
@@ -52,15 +53,7 @@ export function createModel({ state: layerState, services, parts, source }) {
    */
 
   function haversineKm(aLat, aLon, bLat, bLon) {
-    const toRad = (value) => (value * Math.PI) / 180;
-    const dLat = toRad(bLat - aLat);
-    const dLon = toRad(bLon - aLon);
-    const p1 = toRad(aLat);
-    const p2 = toRad(bLat);
-    const a =
-      Math.sin(dLat / 2) ** 2 +
-      Math.cos(p1) * Math.cos(p2) * Math.sin(dLon / 2) ** 2;
-    return 6371 * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    return surfaceM(aLat, aLon, bLat, bLon) / 1000;
   }
 
   /**

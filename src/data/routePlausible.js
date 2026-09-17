@@ -10,18 +10,16 @@
  * low → its destination should be nearby).
  */
 
-const D2R = Math.PI / 180;
-const R_KM = 6371;
+import { EARTH_RADIUS_M, surfaceM } from './geo.js';
 
-/** Haversine great-circle distance in km. */
+const D2R = Math.PI / 180;
+// Kept as the km twin of the canonical metre radius, so this module's
+// angular conversions (d13 / R_KM) cannot drift from the distance authority.
+const R_KM = EARTH_RADIUS_M / 1000;
+
+/** Great-circle distance in km. Delegates to `data/geo.js`. */
 export function greatCircleKm(lat1, lon1, lat2, lon2) {
-  const p1 = lat1 * D2R;
-  const p2 = lat2 * D2R;
-  const dp = (lat2 - lat1) * D2R;
-  const dl = (lon2 - lon1) * D2R;
-  const a =
-    Math.sin(dp / 2) ** 2 + Math.cos(p1) * Math.cos(p2) * Math.sin(dl / 2) ** 2;
-  return R_KM * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return surfaceM(lat1, lon1, lat2, lon2) / 1000;
 }
 
 function bearingRad(lat1, lon1, lat2, lon2) {

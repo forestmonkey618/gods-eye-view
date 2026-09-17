@@ -1,3 +1,5 @@
+import { EARTH_RADIUS_M } from '../data/geo.js';
+
 /**
  * Pure monitor-plane footprint math shared by the client geometry
  * (src/layers/cctv/geometry.js), the server sidecar join
@@ -16,7 +18,6 @@
  * pose and the client can reuse those samples as long as the pose is the same.
  */
 
-const EARTH_RADIUS_M = 6371000;
 export const PLANE_VERT_ASPECT = 16 / 9;
 export const SUPPORT_KEYS = Object.freeze([
   'bl',
