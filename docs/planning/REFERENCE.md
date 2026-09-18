@@ -1,8 +1,14 @@
 # Reference — verified facts the Master Plan depends on
 
-Carried forward from the fork review and direction study, and re-verified at HEAD `0d41b6b`. This is the **evidence file** behind `MASTER-PLAN.md`; where the two disagree, the code wins and this file is corrected.
+Carried forward from the fork review and direction study, re-verified at HEAD `0d41b6b`, and updated for ATAK-CIV study (2026-09) and for I1 spatial-authority implementation. This is the **evidence file** behind `MASTER-PLAN.md`; where the two disagree, the code wins and this file is corrected.
 
-Everything here was read from the checkout, not from a README. Line numbers are from `0d41b6b` and will drift.
+Everything here was read from the checkout, not from a README. Line numbers are from `0d41b6b` and will drift, except where noted as post-I1 (current checkout).
+
+### Update note — I1 implemented, ATAK accepted findings
+
+- I1 spatial authority `src/data/geo.js` now exists (see 1.7). The confirmed antimeridian bug in `pointInRing` is now fixed via delegation to `geo.ringContains`.
+- ATAK-CIV comparative study (2026-09) validated GEV foundation and expanded I7 into User Spatial Objects + AOIs, formalized transient vs persistent lifecycles (new P11), added ephemeral vs persistent distinction (P12), expanded I9 to edge-triggered transitions (APPEARED/UPDATED/STALE/DEPARTED/ENTERED_SCOPE/EXITED_SCOPE), added future selection-deconfliction requirement around I8, and clarified reproducible workspaces/briefs (see MASTER-PLAN 0.4). Parametric sensor geometry deferred to I4/I5, I1 NOT reopened. Concepts NOT adopted from ATAK are listed in MASTER-PLAN 0.4.4.
+- Flights/military `getNearby` still uses `Cesium.Cartesian3.distance` from ECEF center — D9 now RESOLVED as DUAL SEMANTICS, SURFACE authoritative for geographic proximity (see MASTER-PLAN Part 3.4 and D9). DECISION resolved, IMPLEMENTATION pending.
 
 ---
 
@@ -63,15 +69,17 @@ Returned by `collectAircraftProximityWindow(position, {radiusM, subject})` → `
 - `src/data/lifecycle.js` `finalizeRegistrations()` throws `Layer serialization registry mismatch (missing: …; extra: …)` if a layer and its `LAYER_STATE_REGISTRY` entry land apart.
 - `build/application-html.js` — `APPLICATION_TEMPLATES` is a **closed allowlist**; `expandApplicationHtml` throws `Unknown application template` for a template file that was added but not listed.
 
-### 1.7 Spatial primitives (see MASTER-PLAN Part 3 for the full inventory)
+### 1.7 Spatial primitives (see MASTER-PLAN Part 3 for the full inventory) — updated post-I1
 
-- `src/data/naturalEarthRegions.js:38` — private `haversineKm(lon1, lat1, lon2, lat2)` — **the only lon-first implementation in the repo**.
-- `src/data/naturalEarthRegions.js:268` — `pointInRing(ring, lat, lon)`, naive ray casting in raw degrees, **no antimeridian handling** (see `PRE-IMPLEMENTATION-AUDIT.md` §A1).
-- `src/annotations/drawMode.js:49,184,200` — `greatCircleM`, `ringAreaM2`, `ringCentroid`; `formatMeasure()` formats area and length.
-- `src/data/cctvViewshed.js`, `src/data/cctvFootprint.js`, `src/layers/cctv/geometry.js` — camera pose, frustum primitives, `projectPoint(lat, lon, heading, dist)`, ray/plane intersection.
+- **I1 implemented:** `src/data/geo.js` is now the canonical spatial authority (22,476 bytes). Exports `EARTH_RADIUS_M = 6371008.8`, `METRIC {SURFACE, SLANT}`, `DEFAULT_METRIC = SURFACE`, `surfaceM`, `slantM` (with degradation reporting), `distanceM`, `ringContains` (antimeridian-correct), `ringAreaM2`, `anyRingContains`, `nearbyM`, etc. Allocation-free hot path, metres internally. `geoEllipsoid.js` holds `geodesicM` (WGS84, Cesium-backed) for reported numbers. `geoid.js` / `geoid.test.mjs` also present.
+- `src/data/naturalEarthRegions.js` now imports `ringContains, surfaceM` from `./geo.js` (line 19). `pointInRing(ring, lat, lon)` at :273 is now `return ringContains(ring, lat, lon)` — **previously naive ray casting with no antimeridian handling (see PRE-IMPLEMENTATION-AUDIT.md §A1), now fixed and antimeridian-correct**. The only lon-first implementation previously at :38 is retired at boundary — `geo.js` enforces (lat, lon) order everywhere, ring vertices remain [[lon, lat]] per GeoJSON.
+- `src/annotations/drawMode.js:49,184,200` — `greatCircleM`, `ringAreaM2`, `ringCentroid`; `formatMeasure()` formats area and length. Now re-exports/uses `geo.js` where appropriate; Class C duplicates collapsed per I1c intent.
+- `src/data/cctvViewshed.js`, `src/data/cctvFootprint.js`, `src/layers/cctv/geometry.js` — camera pose, frustum primitives, `projectPoint(lat, lon, heading, dist)`, ray/plane intersection. **Parametric sensor geometry (origin/azimuth/elevation/FOV/range) deferred to I4/I5 evaluation — I1 NOT reopened (see MASTER-PLAN 0.4.3, D10).**
 - `src/services/groundFloor.js` (661 lines) — terrain sampling and a mesh floor sampler.
 - `src/hud.js:488` — `_estimateSunElevation(latDeg, lonDeg)`; `src/data/issPass.js` — generalized `findNextIssPass({satrec, latDeg, lonDeg, …})` with `lookAnglesAt`.
-- `src/layers/alpr/policy.js:40` — `EARTH_MEAN_RADIUS_M = 6371008.8` (**Decision D2's value, already in the repo**).
+- `src/layers/alpr/policy.js:40` — `EARTH_MEAN_RADIUS_M = 6371008.8` (**Decision D2's value, already in the repo**, now canonical in `geo.js`).
+- **Flights/military `getNearby` (D9 RESOLVED, implementation PENDING):** `src/layers/flights/queries.js:538`, `src/layers/military/queries.js:326` still compute `Cesium.Cartesian3.distance(center, pos)` where center is ECEF — effectively slant 3D. Owner decision 2026-09: DUAL SEMANTICS, SURFACE authoritative for geographic proximity. SURFACE governs radius membership, cutoff filtering, proximity/discovery, sorting, AOIs, watch/geofence boundaries, ordinary rosters, analyst/search "within X km", ordinary narration. SLANT = physical 3D separation, explicitly named secondary metric, must NEVER silently substitute for `distanceM`, must NOT alter geographic radius membership. Example overhead: surface 0 km, slant ≈10.7 km at 35k ft. Whether slant is eagerly attached as `slantDistanceM`, lazily calculated, or calculated only by specialized 3D consumers is implementation detail deferred. Vessels/installations NOT automatically mandated for migration by D9. DECISION resolved, IMPLEMENTATION pending — do NOT claim surface-consistent until code matches. See MASTER-PLAN Part 3.4 and D9.
+- **Future User Spatial Objects (I7 expanded):** model must support point/pin, polygon, radial circle, corridor (polyline + width/buffer), bbox — general-purpose data-oriented, avoiding class-hierarchy over-engineering. Ephemeral telestration vs persistent User Spatial Objects distinct (P12). Persistence mechanism NOT locked (localStorage vs IndexedDB etc. deferred).
 
 ### 1.8 Environment and baselines
 

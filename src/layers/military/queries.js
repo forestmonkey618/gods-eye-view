@@ -9,6 +9,7 @@ import {
   CONTACT_MATCH_TIER,
 } from '../../data/contactMatch.js';
 import { LANDED_ALT_MAX_FT, LANDED_SPEED_MAX_MPS } from './policy.js';
+import { aircraft as aircraftEntityKey } from '../../data/entityKey.js';
 
 export function createQueries({
   flightState,
@@ -169,6 +170,9 @@ export function createQueries({
     return {
       id: callsign || text(info?.registration) || icao24,
       icao24,
+      // I2a canonical entity identity — same ICAO24 = same entityKey regardless
+      // of flights/military/OpenSky/adsb.lol. Layer/provider is observation, not identity.
+      entityKey: aircraftEntityKey(icao24),
       callsign,
       lat: num(info?.rawLat),
       lon: num(info?.rawLon),
@@ -637,6 +641,55 @@ export function createQueries({
       for (const [icao24, info] of flightState.records.data) {
         result.push(mapAnalystRecord(icao24, info));
         if (result.length >= limit) break;
+      }
+      return result;
+    },
+
+    /**
+     * I2b — Current aircraft entity accessor — uncapped, deterministic, side-effect free.
+     * Projects current in-memory MilitaryFlightRecords.data into normalized plain records
+     * suitable as future input to recordIndex. Current-state only, no history,
+     * no Cesium types, no live references, no caps, independent of billboard
+     * visibility/render culling/camera/dead-reckoned display position.
+     *
+     * Coordinate authority: rawLat/rawLon from current record model — actual reported fix
+     * (pre-dead-reckon), not mutable Cesium billboard position.
+     * Altitude: barometric/MSL aviation field — stored as altitudeFt (feet) in military
+     * records, converted to meters here for normalized shape consistency (0.3048).
+     * Actual stored convention documented: flights altitude = meters, military altitudeFt = feet.
+     * Native identifier: field called `icao24` in existing model actually stores general
+     * aircraft identifier including TIS-B `~` — documented ambiguity, preserved as `icao24`
+     * for compatibility, with entityKey null for non-ICAO.
+     *
+     * Record shape: { entityKey: string|null, icao24: string, lat: number|null, lon: number|null,
+     *   altitudeM: number|null, callsign: string|null }
+     *
+     * Ordering: underlying Map insertion order (deterministic for same store state).
+     * Copy safety: fresh array per call, fresh plain object per record, primitives only.
+     * Performance: O(n) over current store, allocation per record but on-demand not per-frame.
+     *
+     * @returns {Array<{entityKey: string|null, icao24: string, lat: number|null, lon: number|null, altitudeM: number|null, callsign: string|null}>}
+     */
+    getCurrentEntities() {
+      if (!flightState.records.data || flightState.records.data.size === 0)
+        return [];
+      const result = [];
+      for (const [icao24, info] of flightState.records.data) {
+        const num = (v) => (Number.isFinite(v) ? v : null);
+        const text = (v) => {
+          const t = String(v ?? '').trim();
+          return t || null;
+        };
+        result.push({
+          entityKey: aircraftEntityKey(icao24),
+          icao24, // native identifier as stored — field called icao24 but actually general aircraft id including TIS-B ~ (documented ambiguity)
+          lat: num(info?.rawLat),
+          lon: num(info?.rawLon),
+          altitudeM: Number.isFinite(info?.altitudeFt)
+            ? info.altitudeFt * 0.3048
+            : null, // altitudeFt is feet per military records, converted to meters for normalized shape
+          callsign: text(info?.callsign),
+        });
       }
       return result;
     },

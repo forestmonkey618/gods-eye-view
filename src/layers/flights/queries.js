@@ -15,6 +15,7 @@ import {
   FOCUS_EVIDENCE_DEV,
   FLEET_DR_INTERVAL_MS,
 } from './policy.js';
+import { aircraft as aircraftEntityKey } from '../../data/entityKey.js';
 
 export function createQueries({
   flightState,
@@ -239,6 +240,9 @@ export function createQueries({
       // label, not a key — the engine keys on `icao24` below.
       id: callsign || text(info?.registration) || icao24,
       icao24,
+      // I2a canonical entity identity — same ICAO24 = same entityKey regardless
+      // of flights/military/OpenSky/adsb.lol. Layer/provider is observation, not identity.
+      entityKey: aircraftEntityKey(icao24),
       callsign,
       lat: num(info?.rawLat),
       lon: num(info?.rawLon),
@@ -715,6 +719,59 @@ export function createQueries({
           }),
         );
         if (result.length >= limit) break;
+      }
+      return result;
+    },
+
+    /**
+     * I2b — Current aircraft entity accessor — uncapped, deterministic, side-effect free.
+     * Projects current in-memory FlightRecords.data into normalized plain records
+     * suitable as future input to recordIndex. Current-state only, no history,
+     * no Cesium types, no live references, no caps, independent of billboard
+     * visibility/render culling/camera/dead-reckoned display position.
+     *
+     * Coordinate authority: rawLat/rawLon from current record model — the actual
+     * reported fix (pre-dead-reckon), not mutable Cesium billboard position.
+     * Altitude: barometric/MSL aviation field (meters) — not render height.
+     * Native identifier: field called `icao24` in existing model actually stores
+     * general aircraft identifier including TIS-B `~` — documented ambiguity,
+     * preserved as `icao24` for compatibility, with entityKey null for non-ICAO.
+     *
+     * Record shape (minimum useful for future recordIndex):
+     * { entityKey: string|null, icao24: string, lat: number|null, lon: number|null,
+     *   altitudeM: number|null, callsign: string|null }
+     *
+     * - entityKey: canonical aircraft:icao24:<6-hex> or null for TIS-B/non-ICAO/malformed
+     * - icao24: native identifier as stored (e.g., abc123 or ~abc123), preserves ~ for TIS-B
+     * - lat/lon: from rawLat/rawLon (reported fix)
+     * - altitudeM: barometric MSL meters (aviation field)
+     * - callsign: trimmed or null
+     *
+     * Ordering: underlying Map insertion order (deterministic for same store state).
+     * Copy safety: fresh array per call, fresh plain object per record, primitives only.
+     * Performance: O(n) over current store (~11k), allocation per record but on-demand
+     * not per-frame, no sorting, no coordinate conversion, no Cesium.
+     *
+     * @returns {Array<{entityKey: string|null, icao24: string, lat: number|null, lon: number|null, altitudeM: number|null, callsign: string|null}>}
+     */
+    getCurrentEntities() {
+      if (!flightState.records.data || flightState.records.data.size === 0)
+        return [];
+      const result = [];
+      for (const [icao24, info] of flightState.records.data) {
+        const num = (v) => (Number.isFinite(v) ? v : null);
+        const text = (v) => {
+          const t = String(v ?? '').trim();
+          return t || null;
+        };
+        result.push({
+          entityKey: aircraftEntityKey(icao24),
+          icao24, // native identifier as stored — field called icao24 but actually general aircraft id including TIS-B ~ (documented ambiguity)
+          lat: num(info?.rawLat),
+          lon: num(info?.rawLon),
+          altitudeM: num(info?.altitude), // barometric/MSL meters — aviation field, not render height
+          callsign: text(info?.callsign),
+        });
       }
       return result;
     },
