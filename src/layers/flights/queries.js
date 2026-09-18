@@ -813,20 +813,41 @@ export function createQueries({
 
     /**
      * I3a — Current aircraft position provenance sidecar — CURRENT only.
-     * Store-owned: returns current position provenance for THIS flights store,
+     * STORE-LOCAL accessor (not canonical): returns current position provenance for THIS flights store,
      * keyed by native icao24 (lowercased hex, preserves ~ for TIS-B), NOT entityKey.
-     * This avoids inventing a second identity system; canonical consumers can
-     * derive entityKey via aircraftEntityKey(icao24) if needed.
+     * This is deliberate: FlightRecords.data Map is keyed by native icao24 (the actual storage key,
+     * same as _billboards key, trackById resolution, Context cohorts). Provenance follows rawLat/rawLon
+     * which is stored under native id. Using native key allows direct join with store's own data
+     * without reconstruction and includes TIS-B / noncanonical (entityKey:null) which still have
+     * positions that need provenance. Creating synthetic entityKeys for TIS-B would invent identity.
      *
      * - Returns Map<icao24, provenance descriptor> where descriptor is
      *   {epistemic:'reported', sourceId, reportedAtMs, receivedAtMs}
      * - Position = rawLat/rawLon/fix. Follows retained position: if position
      *   retained due to absence, provenance remains old; if replaced, new.
      * - TIS-B / noncanonical (entityKey:null) included, keyed by native id
-     *   (e.g., '~abc123'), no synthetic keys.
+     *   (e.g., '~abc123'), no synthetic keys, no invented canonical identity.
      * - CURRENT only: no history, no previous provenance arrays.
-     * - Copy-safe: fresh Map per call, fresh plain object per descriptor.
-     * - getCurrentEntities() remains unchanged and provenance-unaware.
+     * - Copy-safe: fresh Map per call, fresh plain object per descriptor (frozen internally).
+     * - getCurrentEntities() remains unchanged and provenance-unaware (I2 primitive-only).
+     *
+     * Future canonical consumer join path:
+     * - Canonical consumer holding entityKey = aircraft:icao24:abc123 can derive native id via
+     *   suffix = entityKey.slice('aircraft:icao24:'.length) (lowercased 6-hex) which matches Map key.
+     * - Or more robustly: call getCurrentEntities() which returns both {entityKey, icao24, ...} and
+     *   use icao24 to lookup this Map. This avoids parsing entityKey manually and works for
+     *   current-store eligibility filtering (adapter knows which store produced array).
+     * - Future canonical provenance projection (I3c+) will be an adapter-level projection that:
+     *   1. Takes store-local provenance Map keyed by native id
+     *   2. Filters to canonical only (entityKey != null) via aircraftEntityKey(icao24)
+     *   3. Re-keys by canonical entityKey for canonical consumers, omitting TIS-B from canonical sidecar.
+     *   This keeps store-local complete (includes TIS-B) and canonical projection deliberate, no second identity system.
+     *
+     * Does native-keyed public provenance cause I6/analyst dependency on layer-native identity?
+     * - Analyst records already contain both icao24 and entityKey (I2b). So I6 can join via icao24
+     *   without depending solely on native identity. If analyst only has entityKey, it can derive
+     *   native id as above. Dependency exists but is unavoidable because FlightRecords storage is
+     *   native-keyed; canonical projection will hide it later.
      *
      * @returns {Map<string, {epistemic:string, sourceId:string|null, reportedAtMs:number|null, receivedAtMs:number|null}>}
      */

@@ -94,6 +94,18 @@ test('standalone provenance: missing/invalid header deterministic — defaults t
   assert.equal(snapInvalid.sourceId, 'opensky');
 });
 
+test('standalone provenance: unexpected future header value uses header truthfully, not fabricated opensky', async () => {
+  const fetchImplFuture = mockFetchFactory(async () => mockResponse({
+    headers: { 'x-flight-source': 'future.provider' },
+    payload: { states: [], time: 1700000000 },
+  }));
+  const srcFuture = createOpenSkySource({ fetchImpl: fetchImplFuture, now: () => 1000 });
+  const snapFuture = await srcFuture.getSnapshot({}, {});
+  // Should use header value lowercased as sourceId, not fabricate opensky
+  assert.equal(snapFuture.sourceId, 'future.provider');
+  assert.equal(snapFuture.source, 'future.provider');
+});
+
 test('standalone provenance: adsb.lol source always adsb.lol with receivedAtMs', async () => {
   const fetchImpl = mockFetchFactory(async () => mockResponse({
     headers: { 'x-ads-b-cache-age-ms': '1234' },

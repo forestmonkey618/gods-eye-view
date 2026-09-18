@@ -71,12 +71,20 @@ export function createOpenSkySource({
       if (!response.ok) throw openSkyError(response);
       const flightSourceHeader = header(response, 'x-flight-source');
       const sourceLabel = flightSourceHeader || 'OpenSky Network';
-      // I3a: stable machine sourceId — 'adsb.lol' when fallback header says adsb.lol, else 'opensky'
-      const sourceId =
-        flightSourceHeader &&
-        String(flightSourceHeader).toLowerCase().includes('adsb')
-          ? 'adsb.lol'
-          : 'opensky';
+      // I3a: stable machine sourceId — truthful mapping per server route invariant:
+      // server/providers/aircraft/opensky.js: openSkyProxy primary path does NOT set X-Flight-Source (only X-OpenSky-*),
+      // every successful fallback path via serveAdsbLolPointFallback explicitly sets X-Flight-Source: adsb.lol.
+      // Therefore absence of header logically proves OpenSky (route structure, not guess). No other provider flows through this route.
+      // Unexpected future value: use header value truthfully as sourceId (lowercased) if valid, do not fabricate opensky.
+      const rawHeader = flightSourceHeader ? String(flightSourceHeader).trim() : '';
+      let sourceId;
+      if (!rawHeader) {
+        sourceId = 'opensky'; // proven invariant: primary path, no header
+      } else if (rawHeader.toLowerCase().includes('adsb')) {
+        sourceId = 'adsb.lol';
+      } else {
+        sourceId = rawHeader.toLowerCase(); // future provider — truthful, not guessed
+      }
       const receiptMs = now();
       return {
         ...openSkySnapshot(payload, {
