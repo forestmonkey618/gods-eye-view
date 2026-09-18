@@ -725,17 +725,52 @@ export function createQueries({
 
     /**
      * I2b — Current aircraft entity accessor — uncapped, deterministic, side-effect free.
-     * Projects current in-memory FlightRecords.data into normalized plain records
-     * suitable as future input to recordIndex. Current-state only, no history,
-     * no Cesium types, no live references, no caps, independent of billboard
-     * visibility/render culling/camera/dead-reckoned display position.
+     * Store-owned: returns current records owned by THIS layer's FlightRecords.data
+     * Map, NOT all canonical aircraft known to GEV globally. Suitable as future
+     * input to recordIndex, but recordIndex must know which store produced each
+     * array to reconcile overlap.
      *
-     * Coordinate authority: rawLat/rawLon from current record model — the actual
-     * reported fix (pre-dead-reckon), not mutable Cesium billboard position.
-     * Altitude: barometric/MSL aviation field (meters) — not render height.
-     * Native identifier: field called `icao24` in existing model actually stores
-     * general aircraft identifier including TIS-B `~` — documented ambiguity,
-     * preserved as `icao24` for compatibility, with entityKey null for non-ICAO.
+     * Overlap lifecycle (traced from actual code):
+     * - Flights and military have INDEPENDENT FlightRecords instances.
+     * - Military snapshotRenderer registers currentIcaos via militaryRegistry.registerMilitaryIcaos()
+     *   at END of its poll; flights snapshotRenderer checks isMilitaryIcao() && _militaryLayerSuppresses()
+     *   at START of each observation in its poll. If true, flights forgets (immediate synchronous
+     *   delete from data Map, billboard, cullPositions, history, groundSnap, model) and does NOT
+     *   add to currentIcaos.
+     * - _militaryLayerSuppresses() returns false if !isMilitaryLayerActive(), or if icao is
+     *   currently tracked, or pendingTrackingRestore. Otherwise true.
+     * - On military activation transition, flights._onMilitaryActiveChange(true) immediately
+     *   deletes known-military billboards/data from flights store (not waiting for next poll).
+     * - On military deactivation, flights._onMilitaryActiveChange(false) triggers flightsLayer.update()
+     *   fire-and-forget, so flights will re-acquire after next OpenSky poll. Military disable
+     *   does NOT clear its own data Map (only hides collection, releases models, clears tracking,
+     *   sets active false). So during deactivation window, BOTH Maps can contain same ICAO24.
+     * - Also during race: military discovers new military ICAO in its poll, registers it,
+     *   but flights next poll hasn't run yet → both Maps contain same ICAO24 until flights forgets.
+     * - When military active and steady-state after both polled, same ICAO24 should NOT exist
+     *   in both Maps (flights suppressed). But during transitions, simultaneous existence possible.
+     * - Either store can contain older/newer payload for same ICAO24: each has independent
+     *   observedReceiptMs (Date.now() at receive) and feed cadence, not cross-comparable.
+     * - Visibility (billboardCollection.show) affects presentation, but data ownership affected
+     *   by isMilitaryLayerActive + isMilitaryIcao suppression (forget). Military inactive:
+     *   visibility false but data Map remains populated (stale) until evicted via missing-poll.
+     * - forget() is immediate synchronous delete.
+     *
+     * Therefore this accessor does NOT claim global aircraft authority. It is store-owned.
+     * Same ICAO24 → same canonical entityKey (I2a) does NOT mean payloads interchangeable.
+     * I2c must decide reconciliation; deterministic evidence for winner exists: isMilitaryIcao
+     * + isMilitaryLayerActive (military wins when active), but that is presentation-layer state,
+     *   not pure data. Timestamps observedReceiptMs exist but are not cross-provider comparable
+     *   without I3 provenance. No safe pure-data winner without I2c design decision.
+     *
+     * Coordinate authority: rawLat/rawLon from current record model — actual reported fix
+     * (pre-dead-reckon), not mutable Cesium billboard position.
+     * Altitude: barometric MSL aviation field (meters) — verified: OpenSky row[7] is meters baro,
+     *   readsb alt_baro feet *0.3048 → meters baro, stored as altitude meters in flights.
+     *   Not render height, not geometric. See src/sources/live/aircraft.js.
+     * Native identifier: field called `icao24` actually stores general aircraft identifier
+     * including TIS-B `~` — documented ambiguity, preserved as `icao24` for compatibility,
+     * with entityKey null for non-ICAO per I2a strict 6-hex.
      *
      * Record shape (minimum useful for future recordIndex):
      * { entityKey: string|null, icao24: string, lat: number|null, lon: number|null,
@@ -744,7 +779,7 @@ export function createQueries({
      * - entityKey: canonical aircraft:icao24:<6-hex> or null for TIS-B/non-ICAO/malformed
      * - icao24: native identifier as stored (e.g., abc123 or ~abc123), preserves ~ for TIS-B
      * - lat/lon: from rawLat/rawLon (reported fix)
-     * - altitudeM: barometric MSL meters (aviation field)
+     * - altitudeM: barometric MSL meters (aviation field) — same concept as military after conversion
      * - callsign: trimmed or null
      *
      * Ordering: underlying Map insertion order (deterministic for same store state).

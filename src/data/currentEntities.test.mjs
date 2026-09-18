@@ -83,30 +83,50 @@ test('I2b: canonical ICAO24 record gets correct entityKey', () => {
   assert.equal(entities[0].icao24, 'a1b2c3');
 });
 
-test('I2b: same ICAO24 classification/layer does not create duplicate canonical entities', () => {
-  // Simulate flights and military stores with same ICAO24
+test('I2b: same ICAO24 yields same entityKey — store-owned accessors, not global dedup', () => {
+  // Simulate flights and military stores with same ICAO24 — independent stores
   const flightsRecords = new Map();
   flightsRecords.set('a1b2c3', { rawLat: 51.5, rawLon: -0.12, altitude: 11000, callsign: 'BAW123' });
   const militaryRecords = new Map();
-  militaryRecords.set('a1b2c3', { rawLat: 51.5, rawLon: -0.12, altitudeFt: 36000, callsign: 'RCH123' });
+  militaryRecords.set('a1b2c3', { rawLat: 51.6, rawLon: -0.13, altitudeFt: 36000, callsign: 'RCH123' });
 
   const flightsEntities = makeFlightsCurrentEntities(flightsRecords);
   const militaryEntities = makeMilitaryCurrentEntities(militaryRecords);
 
-  // Same canonical key
+  // Same canonical key — I2a solved entity identity
   assert.equal(flightsEntities[0].entityKey, militaryEntities[0].entityKey);
   assert.equal(flightsEntities[0].entityKey, 'aircraft:icao24:a1b2c3');
 
-  // Union with dedup by ICAO24 (or entityKey) naturally includes one entity when military active
-  // (flights store forgets military when military active, per snapshotRenderer)
-  const union = new Map();
-  for (const e of [...flightsEntities, ...militaryEntities]) {
-    // When military active, flights would have forgotten, so union would have 1
-    // Simulate suppression: flights forgets if isMilitary
-    if (!union.has(e.icao24)) union.set(e.icao24, e);
+  // But payloads NOT interchangeable — different lat/lon/callsign/alt from independent stores
+  assert.notEqual(flightsEntities[0].lat, militaryEntities[0].lat);
+  assert.notEqual(flightsEntities[0].callsign, militaryEntities[0].callsign);
+
+  // Each accessor is store-owned, not globally authoritative
+  assert.equal(flightsEntities.length, 1);
+  assert.equal(militaryEntities.length, 1);
+
+  // In steady-state when military active, flights forgets military ICAOs, so normally only
+  // military store would contain it. But during transitions (military disable, or race where
+  // military just discovered new military ICAO before flights next poll), BOTH Maps can
+  // contain same ICAO24 simultaneously — verified from actual snapshotRenderer code:
+  // military disable does NOT clear its data Map, flights update is fire-and-forget.
+  // Therefore I2b does NOT globally dedup; I2c must decide reconciliation.
+
+  // Simulate what would happen if both stores contain same ICAO24 at same time:
+  const both = [...flightsEntities, ...militaryEntities];
+  assert.equal(both.length, 2); // two store-owned records, same entityKey
+  assert.equal(both[0].entityKey, both[1].entityKey);
+
+  // If I2c naively dedups by ICAO24 keeping last enumerated, Map iteration order
+  // would determine authoritative payload — unsafe. Must have deterministic priority.
+  const naiveUnion = new Map();
+  for (const e of both) {
+    if (!naiveUnion.has(e.icao24)) naiveUnion.set(e.icao24, e);
   }
-  assert.equal(union.size, 1);
-  assert.equal(union.get('a1b2c3').entityKey, 'aircraft:icao24:a1b2c3');
+  // Naive first-wins would keep flights, last-wins would keep military — order-dependent
+  assert.equal(naiveUnion.size, 1);
+  // This proves same entityKey does NOT make payloads interchangeable and that
+  // I2c cannot safely union/dedup by simply keeping whichever enumerated last.
 });
 
 test('I2b: TIS-B/non-ICAO current record remains represented but has entityKey null', () => {

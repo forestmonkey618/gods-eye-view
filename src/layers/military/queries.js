@@ -647,25 +647,52 @@ export function createQueries({
 
     /**
      * I2b — Current aircraft entity accessor — uncapped, deterministic, side-effect free.
-     * Projects current in-memory MilitaryFlightRecords.data into normalized plain records
-     * suitable as future input to recordIndex. Current-state only, no history,
-     * no Cesium types, no live references, no caps, independent of billboard
-     * visibility/render culling/camera/dead-reckoned display position.
+     * Store-owned: returns current records owned by THIS layer's MilitaryFlightRecords.data
+     * Map, NOT all canonical aircraft known to GEV globally. Suitable as future input to
+     * recordIndex, but recordIndex must know which store produced each array to reconcile overlap.
+     *
+     * Overlap lifecycle (traced from actual code):
+     * - Flights and military have INDEPENDENT FlightRecords instances.
+     * - Military snapshotRenderer registers currentIcaos via registerMilitaryIcaos() at END of its poll.
+     *   Flights checks isMilitaryIcao() && _militaryLayerSuppresses() at START of its poll; if true,
+     *   flights forgets immediately (synchronous delete).
+     * - _militaryLayerSuppresses() false if !isMilitaryLayerActive(), tracked, or pending restore.
+     * - On military activation, flights._onMilitaryActiveChange(true) immediately deletes known-military
+     *   from flights store. On deactivation, flights._onMilitaryActiveChange(false) triggers flights update
+     *   fire-and-forget. Military disable does NOT clear its own data Map (only hides collection,
+     *   sets active false). So during deactivation window, BOTH Maps can contain same ICAO24.
+     * - Race: military discovers new military ICAO, registers, but flights next poll hasn't run → both contain.
+     * - When military active steady-state, same ICAO24 should NOT exist in both Maps (flights suppressed),
+     *   but transitions allow simultaneous existence.
+     * - Either store can contain older/newer payload for same ICAO24: independent observedReceiptMs.
+     * - Visibility affects presentation, but data ownership affected by isMilitaryLayerActive + isMilitaryIcao.
+     * - forget() immediate.
+     *
+     * Therefore this accessor does NOT claim global aircraft authority. Store-owned.
+     * Same ICAO24 → same entityKey does NOT mean payloads interchangeable. I2c must decide
+     * reconciliation; deterministic evidence: isMilitaryIcao + isMilitaryLayerActive (military wins
+     * when active), but that is presentation-layer state, not pure data. Timestamps exist but
+     * not cross-provider comparable without I3.
      *
      * Coordinate authority: rawLat/rawLon from current record model — actual reported fix
      * (pre-dead-reckon), not mutable Cesium billboard position.
-     * Altitude: barometric/MSL aviation field — stored as altitudeFt (feet) in military
-     * records, converted to meters here for normalized shape consistency (0.3048).
-     * Actual stored convention documented: flights altitude = meters, military altitudeFt = feet.
-     * Native identifier: field called `icao24` in existing model actually stores general
-     * aircraft identifier including TIS-B `~` — documented ambiguity, preserved as `icao24`
-     * for compatibility, with entityKey null for non-ICAO.
+     * Altitude: barometric MSL aviation field — verified: readsb alt_baro feet → meters baro
+     *   in src/sources/live/aircraft.js baroAltitudeM = baroFt*0.3048, then military stores
+     *   altitudeFt = baroAltitudeM/0.3048 feet barometric, converted back to meters here for
+     *   normalized shape (0.3048). Same concept as flights (both barometric MSL), just different
+     *   stored units. Not geometric, not AGL, not render height.
+     * Native identifier: field called `icao24` actually stores general aircraft identifier
+     * including TIS-B `~` — documented ambiguity, preserved as `icao24` for compatibility,
+     * with entityKey null for non-ICAO per I2a.
      *
      * Record shape: { entityKey: string|null, icao24: string, lat: number|null, lon: number|null,
      *   altitudeM: number|null, callsign: string|null }
+     * No military classification field — layer membership NOT entity identity, provider provenance I3.
+     * Store/layer origin should remain OUTSIDE normalized record, known by index adapter via which
+     * accessor was called, to avoid contaminating entity record.
      *
-     * Ordering: underlying Map insertion order (deterministic for same store state).
-     * Copy safety: fresh array per call, fresh plain object per record, primitives only.
+     * Ordering: Map insertion order deterministic for same store state.
+     * Copy safety: fresh array, fresh plain object, primitives only.
      * Performance: O(n) over current store, allocation per record but on-demand not per-frame.
      *
      * @returns {Array<{entityKey: string|null, icao24: string, lat: number|null, lon: number|null, altitudeM: number|null, callsign: string|null}>}

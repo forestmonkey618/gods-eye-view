@@ -1075,5 +1075,213 @@ No new architecture check added for I2b. Justification: I2b is per-layer accesso
 
 **End of I2b — Accessor `getCurrentEntities()` implemented flights + military, uncapped, deterministic, side-effect free, plain/copy-safe, coordinate authority rawLat/rawLon/altitude, TIS-B null key preserved, 12 tests passing, no recordIndex, no I3, no D9, no I1 reopen.**
 
+---
+
+## 24. I2b REVIEW — Independent Stores, Overlap Lifecycle, and I2c Reconciliation Contract
+
+**Date:** 2026-09-18 (review)  
+**Scope:** Resolve architectural contract for two independent aircraft stores before I2b approval. No recordIndex, no merged accessor, no I2c, no provenance, no D9.
+
+### 1. Exact flights/military overlap lifecycle (traced from actual code)
+
+**Independent stores:**
+- `src/layers/flights/state.js`: `flightState.records = new FlightRecords(...)` independent Map.
+- `src/layers/military/state.js`: `flightState.records = new MilitaryFlightRecords(...)` independent Map.
+- Not shared. Each has `data Map<icao24,meta>`, `missingPolls`, `geoidNCache`, `receive()`, `absence()`, `forget()`.
+
+**Military snapshotRenderer (`src/layers/military/snapshotRenderer.js`):**
+- Builds `currentIcaos Set` from `snapshot.records` (ids that arrived in this military poll).
+- For each aircraft: `records.receive()` → `data.set()`, billboard handling.
+- After loop: `registerMilitaryIcaos(currentIcaos)` → `militaryRegistry._milIcaos.add(lowercased)` accumulates, never declassifies, `_lastRefreshMs = now()`.
+- Returns `{count, ids: currentIcaos}`.
+
+**Flights snapshotRenderer (`src/layers/flights/snapshotRenderer.js`):**
+- `refreshMilitaryRegistryIfStale()` at start — early returns if `_militaryLayerActive true`, so when military active, flights does NOT poll military source for classification; relies on existing `_milIcaos`.
+- For each observation in `snapshot.records`:
+  - `isMil = isMilitaryIcao(icao24)` checks `_milIcaos.has(lowercased)`.
+  - If `isMil && tracking._militaryLayerSuppresses(icao24)`: if billboard exists, remove billboard, delete from `_billboards`, `_releaseModel`, `records.forget(icao24)` (synchronous delete from data/missingPolls/geoidNCache), delete `_cullPositions`, `_positionHistory`, `_displayCourse`, `_groundSnap.forget()`, then `continue` (does NOT add to currentIcaos, does NOT receive).
+- `_militaryLayerSuppresses(icao24)` in `src/layers/flights/tracking.js:706`:
+  - `if (!isMilitaryLayerActive()) return false;`
+  - `if (icao24 === _trackedIcao) return false;` // tracked exemption
+  - `if (icao24 === _pendingTrackingRestore?.id) return false;` // restore latch exemption
+  - `return true;`
+- `forget()` is immediate synchronous.
+
+**Layer toggle:**
+- Military `lifecycle.js enable()`: `setMilitaryLayerActive(true)` → fires `onMilitaryLayerActiveChange` listeners.
+- Flights `tracking.js _onMilitaryActiveChange(active)`:
+  - If active true: iterate flights `_billboards`, for each where `isMilitaryIcao(icao) && icao !== tracked`, remove billboard, `_releaseModel`, `records.data.delete`, `_cullPositions.delete`, `_positionHistory.delete`, `_displayCourse.delete`, `_groundSnap.forget`, `missingPolls.delete`. Immediate suppression, not waiting for next poll. Sets `feed._count = size`.
+  - If active false and billboardCollection.show: `void flightsLayer.update(viewer)` fire-and-forget to bring next OpenSky poll forward.
+- Military `disable()`: `setMilitaryLayerActive(false)`, hides `billboardCollection.show=false`, `releaseContinuousRender`, `_releaseModels`, `_clearTracking`, `_destroyTrail`, destroys click handler, unregisters pick owner, removes preRender listeners. Does NOT clear `records.data` Map. So data remains populated (stale) while hidden.
+- Flights `disable()`: hides collection, aborts updates, clears tracking, etc., but does NOT clear `records.data`? Actually `destroy()` clears, but `disable()` does NOT clear data Map — it keeps records but hides collection, per `hasContact` returning null when hidden.
+
+**Visibility vs ownership:**
+- `billboardCollection.show` controls presentation. Data ownership affected by `isMilitaryLayerActive + isMilitaryIcao` suppression which calls `forget()` (deletes from flights data). So military active affects flights data ownership, not just presentation. Military inactive: military data remains but hidden (visibility false, ownership remains).
+
+**Provider refresh/reconnect:**
+- Each poll calls `applySnapshot`. Flights forget is immediate within poll loop. Military register is at end of poll.
+
+### 2. Whether simultaneous same-ICAO24 records can exist in both Maps
+
+**Yes, under timing/race conditions:**
+
+- **Military activation race:** Military layer becomes active, flights immediately deletes known military from its store via `_onMilitaryActiveChange(true)`. But if military then discovers NEW military ICAO in its next poll that flights already had, flights won't suppress until its next poll (suppression only in snapshotRenderer loop, not via registry listener except for activation transition). Window: after military poll registers new icao, before flights next poll → both Maps contain same ICAO24.
+
+- **Military deactivation window:** Military disable does NOT clear its data Map. It sets active false. Flights triggers update fire-and-forget, but will only re-acquire after next OpenSky poll succeeds. So during deactivation window, military Map still has old record (stale), flights Map may newly receive same ICAO24 from OpenSky → both contain same ICAO24 simultaneously.
+
+- **Initial activation before first military poll:** If military layer just enabled but hasn't completed first poll, `_milIcaos` may be empty/stale, flights may still have military ICAO in its Map, military Map may not yet have it → not both, but opposite hole. After military poll, both could temporarily coexist until flights next poll.
+
+- **Feed dropout hole:** When military active, flights suppresses known military. If military feed drops ICAO24 (missing polls → forget), flights still suppresses because `_milIcaos` never declassifies, so neither store has it → hole, not overlap, but shows suppression not purely data-driven.
+
+**Normally, when military active and steady-state after both layers have polled, same ICAO24 should NOT exist in both Maps (flights suppressed).** Code guarantees this via `forget()` in flights snapshot loop and immediate delete on activation transition, but only for ICAOs already in `_milIcaos` Set.
+
+**Older/newer payload:** Each store has independent `observedReceiptMs = Date.now()` at receive, `lastContactEpochMs` from feed, `positionTimeMs`. No cross-store comparison. So if both contain same ICAO24 during overlap window, each holds its own last-known meta from its own provider (OpenSky vs adsb.lol) with different lat/lon/alt/callsign and different timestamps. Can be older/newer arbitrarily.
+
+### 3. Exact semantics of each getCurrentEntities()
+
+- `flights.getCurrentEntities()`: **Current records owned by THIS flights FlightRecords.data Map**, i.e., aircraft currently known to flights store after its own ingestion, sticky merge, missing-poll eviction, and military suppression. NOT globally authoritative for all aircraft known to GEV. When military active, does NOT contain known-military ICAOs (suppressed). When military inactive, contains all current OpenSky/adsb.lol aircraft including military-classified ones.
+
+- `military.getCurrentEntities()`: **Current records owned by THIS military MilitaryFlightRecords.data Map**, i.e., aircraft currently known to military store after its own ingestion and missing-poll eviction. NOT globally authoritative. When military active, contains military aircraft currently known to adsb.lol. When military inactive/hidden, still contains its last-known Map (stale) until evicted, but presentation hidden (`billboardCollection.show=false`, `hasContact` returns null).
+
+Both accessors are store-owned, on-demand, uncapped, plain, side-effect free, independent of Cesium billboard visibility/dead-reckon.
+
+Naming `getCurrentEntities()` does NOT falsely imply global authority when documented as store-owned — JSDoc now explicitly states store-owned semantics and overlap behavior.
+
+### 4. Whether either accessor claims global aircraft authority
+
+**No.** After JSDoc clarification, neither accessor claims global authority. Each explicitly returns records owned by its own store. Global view requires I2c recordIndex that knows which store produced each array.
+
+### 5. Whether I2c can safely union/dedup today
+
+**No, not safely by simply keeping whichever enumerated last.** If two independent stores contain `aircraft:icao24:abc123`, naive union dedup by ICAO24 with first-wins or last-wins makes Map iteration order determine authoritative payload, which is unsafe and non-deterministic for consumers.
+
+### 6. Deterministic reconciliation evidence that exists today
+
+- **Military classification:** `militaryRegistry.isMilitaryIcao(icao)` — Set `_milIcaos` accumulates, never declassifies mid-session, deterministic, small (few hundred hexes).
+- **Layer activation state:** `isMilitaryLayerActive()` boolean — true while military layer enabled.
+- **Store ownership/suppression rules:** When military active and isMilitaryIcao true, flights forgets, military wins. When military inactive, flights wins (military hidden). This is explicit priority rule encoded in `snapshotRenderer.js` and `_onMilitaryActiveChange`.
+- **Provider timestamps:** Each meta has `observedReceiptMs` (client receipt), `lastContactEpochMs` (feed contact time), `positionTimeMs` / `fixEpochMs`. These exist but are per-store, from different providers (OpenSky vs adsb.lol) with different clocks, not cross-provider comparable without I3 provenance semantics. Using newest-wins would import I3-like timestamp comparison prematurely.
+
+**Evidence provides deterministic priority via active state + registry, but that priority is presentation-layer state, not pure data.** It matches current rendering: military wins when active, flights wins when inactive. However, it still leaves holes (military active but military feed dropped → neither has it) and stale data (military inactive but its Map still holds old record).
+
+No safe pure-data winner (e.g., baro vs geo altitude, lat/lon) without I3. Timestamps not safe without I3.
+
+### 7. Whether reconciliation is resolved by existing architecture or remains I2c design issue
+
+**Partially resolved by existing architecture, but genuine I2c design decision remains.**
+
+Existing architecture attempts deterministic resolution via suppression: when military active, flights forgets, so only military holds it in steady state. This resolves most cases.
+
+But genuine I2c decision remains because:
+- Overlap windows exist (activation race, deactivation window) where both hold same ICAO24 with different payloads.
+- Hole case exists where neither holds it (military active, military feed dropped, flights suppressing due to never-declassify registry).
+- Layer activation state is UI presentation, not pure data, so I2c must decide whether to respect presentation priority or be presentation-agnostic.
+- Timestamps exist but require I3 semantics to be safe.
+
+**Smallest safe options for I2c WITHOUT choosing based on speculation:**
+
+- **Option A — Respect current suppression priority:** If `isMilitaryLayerActive && isMilitaryIcao(icao)`, military record wins; else flights wins. Simple, matches existing rendering, deterministic, but couples index to UI layer state and registry (presentation concerns).
+
+- **Option B — Keep both as separate observations with same entityKey:** Do not dedup in I2c; expose conflict as array of store-owned records per entityKey, or keep both with explicit `sourceStore` metadata outside normalized record. Lets consumers see conflict, avoids arbitrary winner.
+
+- **Option C — Newest-wins by observedReceiptMs / positionTimeMs:** Pick record with most recent `observedReceiptMs` or `lastContactEpochMs`. Requires timestamp comparison across providers, imports I3-like freshness semantics, not safe without provenance, but deterministic if timestamps trusted.
+
+- **Option D — No dedup in I2b, explicit policy in I2c adapter:** I2b accessors remain store-owned, I2c adapter retains context of which accessor produced each array (e.g., `sourceLayer: 'flights'|'military'` outside normalized record) and applies explicit policy with documentation, not inside entity record.
+
+Do NOT implement any option now; report as open I2c design decision.
+
+### 8. Whether normalized record shape changed and why
+
+**No shape change.** Shape remains 6 fields: `entityKey, icao24, lat, lon, altitudeM, callsign`. Minimal, justified.
+
+**Military classification field NOT added.** Layer membership is NOT entity identity, provider provenance belongs I3. Store/layer origin should remain OUTSIDE normalized entity record and be known by index adapter via which accessor was called. This avoids contaminating entity record merely to solve future problem. If needed, adapter can attach `sourceLayer` metadata outside record.
+
+If future index needs to distinguish two store-owned observations without knowing which accessor produced them, adapter boundary retains context — does not require field inside entity record.
+
+### 9. Exact altitude semantics for each store
+
+Verified from source:
+
+- `src/sources/live/aircraft.js`:
+  - OpenSky: `baroAltitudeM: finite(row[7])` — row[7] is barometric altitude in meters per OpenSky API spec.
+  - readsb (adsb.lol): `baroFt = finite(row.alt_baro)` where `alt_baro` is feet per readsb spec (barometric altitude in feet), then `baroAltitudeM: baroFt*0.3048` → meters barometric.
+  - Both sources normalize to `baroAltitudeM` meters barometric MSL.
+
+- `src/layers/flights/records.js`:
+  - `alt = stickyNumber(baro_alt, prevMeta?.altitude, onGround?0:10000)` where `baro_alt = observation.baroAltitudeM` (meters barometric). Stored as `altitude` meters barometric MSL, sticky, grounded 0 fallback. `geoAltitudeM` separate (ellipsoid geometric), `renderAltitudeM` separate (visual datum with geoid/ground corrections).
+
+- `src/layers/military/records.js`:
+  - `altitudeFt = baroAltitudeM == null ? null : baroAltitudeM/0.3048` where `baroAltitudeM = aircraft.baroAltitudeM` (meters barometric from readsb normalization). So `altitudeFt` is feet barometric MSL, derived from meters barometric.
+  - `altitudeM = baroAltitudeM ?? (onGround ? prev altitudeFt*0.3048 : 3048)` — fallback, but primary is barometric.
+  - `geoAltitudeM` separate, `renderAltitudeM` separate.
+
+**Both stores represent same altitude concept: barometric altitude MSL, just different stored units.** Flights stores meters, military stores feet (converted from meters). Not geometric, not AGL, not render height.
+
+### 10. Whether altitudeM remains semantically valid
+
+**Yes.** Converting both to `altitudeM` meters barometric MSL is valid and does NOT erase important distinction. Both are barometric MSL, same concept, different units. Conversion `*0.3048` preserves semantics. No mixing of baro vs geo.
+
+Narrowest safe representation: keep `altitudeM` as barometric MSL meters for both, with JSDoc stating barometric MSL and verified source chain. Do NOT introduce separate `baroAltitudeM` vs `geoAltitudeM` in I2b minimal shape — that would be I3/I4 detail.
+
+### 11. Correction to "dedup via suppression" test claim
+
+**Previous claim:** Test named `same ICAO24 classification/layer does not create duplicate canonical entities` and comment said "Union dedup by ICAO24 naturally includes one entity when military active (flights store forgets military when military active, per snapshotRenderer)" — implied I2b deduplicates globally.
+
+**Correction:** Test renamed to `same ICAO24 yields same entityKey — store-owned accessors, not global dedup`. Now proves:
+- Same ICAO24 → same entityKey (I2a identity)
+- Payloads NOT interchangeable (different lat/lon/callsign/alt from independent stores)
+- Each accessor store-owned, not globally authoritative
+- During transitions both Maps can contain same ICAO24 (verified from actual lifecycle code: military disable does NOT clear data, flights update fire-and-forget)
+- Naive union dedup by keeping first/last enumerated is order-dependent and unsafe — demonstrates I2c cannot safely dedup by simply keeping whichever enumerated last.
+
+Test now accurately reflects I2b does NOT globally dedup; it exposes store-owned records.
+
+### 12. Exact files changed in this review
+
+- `src/layers/flights/queries.js` — JSDoc for `getCurrentEntities()` expanded to document store-owned semantics, exact overlap lifecycle (independent stores, registerMilitaryIcaos at END of military poll, flights checks at START, _militaryLayerSuppresses false if !active/tracked/pending, _onMilitaryActiveChange immediate delete on activation, fire-and-forget update on deactivation, military disable does NOT clear data Map, both Maps can contain same ICAO24 during deactivation and race windows, either can contain older/newer payload, visibility vs ownership, forget immediate), clarifies does NOT claim global authority, same entityKey != interchangeable payloads, I2c reconciliation open, altitude verified barometric MSL meters from OpenSky row[7] meters and readsb alt_baro feet*0.3048.
+
+- `src/layers/military/queries.js` — Same JSDoc expansion, altitude verified barometric MSL (readsb alt_baro feet → meters, stored as altitudeFt feet barometric, converted back), store origin outside normalized record.
+
+- `src/data/currentEntities.test.mjs` — Test 4 renamed/reframed from "does not create duplicate canonical entities" to "yields same entityKey — store-owned accessors, not global dedup", now proves identity same but payloads different, both stores can contain same ICAO24 during transitions, naive dedup unsafe.
+
+- `docs/planning/I2-PRE-IMPLEMENTATION-REPORT.md` — Appended Section 24 with full lifecycle trace, semantics, reconciliation analysis, altitude verification, test correction.
+
+No recordIndex file created, no merged/union accessor implemented, no I2c, no provenance, no D9.
+
+### 13. Tests run/results
+
+- `node --test src/data/currentEntities.test.mjs` — **12 pass, 0 fail** after reframing (including corrected test 4).
+- `node --test src/data/entityKey.test.mjs src/data/currentEntities.test.mjs` — **20 pass, 0 fail**.
+- `grep -n getCurrentEntities src/layers/flights/queries.js src/layers/military/queries.js` — both present, store-owned JSDoc.
+- `ls src/data/recordIndex.js` — does NOT exist (confirmed no recordIndex).
+- `grep -n Cartesian3.distance src/layers/flights/queries.js src/layers/military/queries.js` — still slant, D9 not implemented.
+
+### 14. Confirmation no recordIndex/I2c implementation occurred
+
+Confirmed:
+- `src/data/recordIndex.js` does NOT exist.
+- No merged/union aircraft accessor implemented — only per-store `getCurrentEntities()`.
+- No I2c indexing, no `upsertFromLayer`, no `snapshot`, no `assembledAt`.
+- No provenance (`observedAt`/`staleAt`/`accuracyM`), no D9 (`slantDistanceM`), no I1 reopen (`geo.js` untouched).
+
+### 15. Genuine owner decision now required before I2c
+
+**Yes — I2c reconciliation policy:**
+
+When both independent stores contain same canonical `aircraft:icao24:<id>` simultaneously (during military disable window or activation race), what should canonical index do?
+
+- **Option A** respects current suppression priority (military wins when active and isMilitaryIcao) — matches rendering, but couples index to UI layer active state and never-declassify registry.
+- **Option B** keeps both as separate observations with same entityKey, exposing conflict, avoiding arbitrary winner.
+- **Option C** newest-wins by `observedReceiptMs`/`lastContactEpochMs` — requires cross-provider timestamp trust, imports I3 semantics.
+- **Option D** adapter retains `sourceLayer` context outside normalized record and applies explicit policy documented, not inside entity record.
+
+Owner must decide whether I2c index should be presentation-aware (respect active layer) or presentation-agnostic (pure data), and whether to allow dual records per entityKey or enforce single winner.
+
+Additionally, TIS-B `~` identifiers remain outside canonical `aircraft:icao24` (entityKey null) per I2a strict 6-hex — owner decision needed if separate namespace `aircraft:tisb:<id>` desired before I2c.
+
+**End of I2b Review — Independent stores clarified, overlap lifecycle traced, accessor semantics store-owned not global, same entityKey != interchangeable payloads, altitude verified barometric MSL, test claim corrected, no I2c implemented, owner decision required for I2c reconciliation.**
+
+
+
 
 
