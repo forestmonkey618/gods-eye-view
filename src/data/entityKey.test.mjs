@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { aircraft } from './entityKey.js';
+import { aircraft, vessel, isValid } from './entityKey.js';
 
 // I2a supports aircraft only — canonical form aircraft:icao24:<normalized>
 // Validation: exactly 6 hex digits [0-9a-f]{6} lowercased trimmed per actual feeds
@@ -94,4 +94,115 @@ test('entityKey: deterministic 6-hex validation from actual feeds', () => {
   // 6 hex is the only meaningful length for ICAO24
   assert.equal(aircraft('a1b2c'), null); // 5
   assert.equal(aircraft('a1b2c3d'), null); // 7 without ~
+});
+
+// I2d — VESSEL / MMSI
+
+test('entityKey: vessel canonical identity — exact 9 digits', () => {
+  assert.equal(vessel('123456789'), 'vessel:mmsi:123456789');
+});
+
+test('entityKey: vessel whitespace normalization deliberate', () => {
+  assert.equal(vessel(' 123456789 '), 'vessel:mmsi:123456789');
+  assert.equal(vessel(' 123456789 '), vessel('123456789'));
+});
+
+test('entityKey: vessel exactly 9 digits required', () => {
+  assert.equal(vessel('12345678'), null); // 8
+  assert.equal(vessel('1234567890'), null); // 10
+  assert.equal(vessel(''), null);
+  assert.equal(vessel('   '), null);
+  assert.equal(vessel(null), null);
+  assert.equal(vessel(undefined), null);
+});
+
+test('entityKey: vessel letters rejected', () => {
+  assert.equal(vessel('12345abcd'), null);
+  assert.equal(vessel('abcdefghi'), null);
+  assert.equal(vessel('12345678a'), null);
+});
+
+test('entityKey: vessel too short / too long rejected', () => {
+  assert.equal(vessel('1'), null);
+  assert.equal(vessel('12'), null);
+  assert.equal(vessel('12345678901'), null);
+});
+
+test('entityKey: vessel missing/empty rejected', () => {
+  assert.equal(vessel(''), null);
+  assert.equal(vessel('   '), null);
+  assert.equal(vessel(null), null);
+  assert.equal(vessel(undefined), null);
+  assert.equal(vessel('abc:123'), null);
+  assert.equal(vessel('123 456789'), null);
+});
+
+test('entityKey: vessel leading-zero STRING preserved', () => {
+  assert.equal(vessel('012345678'), 'vessel:mmsi:012345678');
+  assert.equal(vessel('000000001'), 'vessel:mmsi:000000001');
+  // Ensure leading zero not stripped
+  const key = vessel('012345678');
+  assert.ok(key.endsWith('012345678'));
+});
+
+test('entityKey: vessel no automatic zero-padding', () => {
+  // Numeric 8-digit should NOT be padded to 9
+  assert.equal(vessel(12345678), null);
+  assert.equal(vessel('12345678'), null);
+  // Numeric 9-digit valid, but numeric losing leading zero is rejected
+  assert.equal(vessel(123456789), 'vessel:mmsi:123456789');
+  // Number 12345678 that would be "012345678" if padded must be null
+  assert.equal(vessel(12345678), null);
+  // String "12345678" must be null, not padded
+  assert.equal(vessel('12345678'), null);
+});
+
+test('entityKey: aircraft behavior remains unchanged after vessel addition', () => {
+  assert.equal(aircraft('abc123'), 'aircraft:icao24:abc123');
+  assert.equal(aircraft('ABC123'), 'aircraft:icao24:abc123');
+  assert.equal(aircraft(''), null);
+  assert.equal(aircraft('~abc123'), null);
+});
+
+test('entityKey: isValid accepts canonical aircraft key', () => {
+  assert.equal(isValid('aircraft:icao24:abc123'), true);
+  assert.equal(isValid('aircraft:icao24:000000'), true);
+  assert.equal(isValid('aircraft:icao24:ffffff'), true);
+});
+
+test('entityKey: isValid accepts canonical vessel key', () => {
+  assert.equal(isValid('vessel:mmsi:123456789'), true);
+  assert.equal(isValid('vessel:mmsi:012345678'), true);
+  assert.equal(isValid('vessel:mmsi:000000001'), true);
+});
+
+test('entityKey: isValid rejects uppercase/noncanonical aircraft key', () => {
+  assert.equal(isValid('aircraft:icao24:ABC123'), false);
+  assert.equal(isValid('aircraft:icao24:AbC123'), false);
+  assert.equal(isValid(' aircraft:icao24:abc123'), false);
+  assert.equal(isValid('aircraft:icao24:abc123 '), false);
+  assert.equal(isValid('aircraft:icao24:abc12'), false); // too short
+  assert.equal(isValid('aircraft:icao24:abc1234'), false); // too long
+  assert.equal(isValid('aircraft:icao24:zzzzzz'), false);
+});
+
+test('entityKey: isValid rejects malformed vessel key', () => {
+  assert.equal(isValid('vessel:mmsi:12345678'), false); // 8
+  assert.equal(isValid('vessel:mmsi:1234567890'), false); // 10
+  assert.equal(isValid('vessel:mmsi:12345abcd'), false);
+  assert.equal(isValid('vessel:mmsi: 123456789'), false);
+  assert.equal(isValid('vessel:mmsi:123456789 '), false);
+  assert.equal(isValid(' vessel:mmsi:123456789'), false);
+  assert.equal(isValid('vessel:mmsi:'), false);
+});
+
+test('entityKey: isValid rejects unsupported domains', () => {
+  assert.equal(isValid('satellite:norad:12345'), false);
+  assert.equal(isValid('banana'), false);
+  assert.equal(isValid('foo:bar'), false);
+  assert.equal(isValid('aircraft:icao24:tisb'), false);
+  assert.equal(isValid(''), false);
+  assert.equal(isValid(null), false);
+  assert.equal(isValid(undefined), false);
+  assert.equal(isValid(123), false);
 });

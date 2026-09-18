@@ -7,6 +7,7 @@ import {
   FOCUS_EVIDENCE_DEV,
   AIS_FIRST_CONNECT_LABEL,
 } from './policy.js';
+import { vessel as vesselEntityKey } from '../../data/entityKey.js';
 
 export function createQueries({
   vesselState,
@@ -364,6 +365,78 @@ export function createQueries({
           position,
           latitude: record.lat,
           longitude: record.lon,
+        });
+      }
+      return result;
+    },
+
+    /**
+     * I2d — Current vessel entity accessor — uncapped, deterministic, side-effect free.
+     * Store-owned: returns current records owned by THIS vessel store's
+     * VesselRecords.all (byMmsi + unkeyed), NOT global maritime truth.
+     *
+     * Overlap lifecycle (traced from actual code):
+     * - VesselRecords owns byMmsi Map + unkeyed array + all array.
+     * - reconcile() clears unkeyed each refresh, rebuilds all as [...byMmsi.values(), ...unkeyed].
+     * - disable() sets enabled false, invalidates session, hides collection, clears overlay,
+     *   clears inspection, destroys trail, aborts, but does NOT clear byMmsi/unkeyed/all.
+     *   So retained stale cache remains after disable.
+     * - resetState() (destroy) DOES clear byMmsi Map and unkeyed array and all.
+     * - LayerLifecycle not used for vessels — vessel enable/disable directly owns ingestion.
+     * - Therefore getCurrentEntities() represents store's retained current-record model,
+     *   but eligibility to contribute to GLOBAL current index depends on whether that
+     *   store is actively ingesting/current (feed.enabled). Do not call retained
+     *   disabled cache globally current.
+     *
+     * Unkeyed handling:
+     * - Records without MMSI go to unkeyed array (mmsi == ''), still have lat/lon and are
+     *   displayed. They are current records but lack canonical identity.
+     * - getCurrentEntities() exposes BOTH canonical and unkeyed current vessel records,
+     *   with unkeyed carrying entityKey:null, per I2b precedent (flights exposes TIS-B
+     *   with entityKey null). RecordIndex indexes only canonical (entityKey != null).
+     * - Malformed MMSI (non-9-digit) present in byMmsi due to existing VesselRecords
+     *   permissive check (any non-empty string) — exposed with entityKey:null, no
+     *   invented identity.
+     *
+     * Coordinate authority: lat/lon from current record model (stored geographic
+     * coordinates), not mutable Cesium billboard position, not camera, not getNearby.
+     * Independent of D9 surface/slant — identity/index only.
+     *
+     * Record shape (minimum useful for recordIndex):
+     * { entityKey: string|null, mmsi: string|null, lat: number|null, lon: number|null,
+     *   name: string|null, speedKts: number|null, courseDeg: number|null }
+     *
+     * - entityKey: canonical vessel:mmsi:<9-digit> or null for unkeyed/malformed
+     * - mmsi: native identifier as stored (trimmed string) or null if empty
+     * - lat/lon: from record.lat/lon (reported fix)
+     * - name: trimmed or null
+     * - speedKts: record.speed (knots) or null
+     * - courseDeg: record.course or null
+     *
+     * Ordering: underlying all array insertion order (deterministic for same store state).
+     * Copy safety: fresh array per call, fresh plain object per record, primitives only.
+     * Performance: O(n) over current store, allocation per record but on-demand not per-frame.
+     *
+     * @returns {Array<{entityKey: string|null, mmsi: string|null, lat: number|null, lon: number|null, name: string|null, speedKts: number|null, courseDeg: number|null}>}
+     */
+    getCurrentEntities() {
+      const records = state.records.all;
+      if (!Array.isArray(records) || !records.length) return [];
+      const result = [];
+      for (const record of records) {
+        const num = (v) => (Number.isFinite(v) ? v : null);
+        const text = (v) => {
+          const t = String(v ?? '').trim();
+          return t || null;
+        };
+        result.push({
+          entityKey: vesselEntityKey(record.mmsi),
+          mmsi: text(record.mmsi),
+          lat: num(record.lat),
+          lon: num(record.lon),
+          name: text(record.name),
+          speedKts: num(record.speed),
+          courseDeg: num(record.course),
         });
       }
       return result;
