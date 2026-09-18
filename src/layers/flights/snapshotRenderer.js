@@ -73,6 +73,9 @@ export function createFlightSnapshotRenderer({
           viewerLonDeg,
           trackedId: flightState._trackedIcao,
           floorWarmPoints,
+          // I3a: one receipt time per snapshot batch is more truthful than per-aircraft Date.now()
+          sourceId: snapshot.sourceId || null,
+          receivedAtMs: snapshot.receivedAtMs || null,
         },
       );
       const position = Cesium.Cartesian3.fromDegrees(

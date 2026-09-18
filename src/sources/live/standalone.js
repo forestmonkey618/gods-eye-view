@@ -69,13 +69,24 @@ export function createOpenSkySource({
         'OpenSky',
       );
       if (!response.ok) throw openSkyError(response);
+      const flightSourceHeader = header(response, 'x-flight-source');
+      const sourceLabel = flightSourceHeader || 'OpenSky Network';
+      // I3a: stable machine sourceId — 'adsb.lol' when fallback header says adsb.lol, else 'opensky'
+      const sourceId =
+        flightSourceHeader &&
+        String(flightSourceHeader).toLowerCase().includes('adsb')
+          ? 'adsb.lol'
+          : 'opensky';
+      const receiptMs = now();
       return {
         ...openSkySnapshot(payload, {
-          source: header(response, 'x-flight-source') || 'OpenSky Network',
+          source: sourceLabel,
+          sourceId,
           coverage:
             header(response, 'x-flight-coverage') ||
             'worldwide upstream snapshot',
-          now: now(),
+          now: receiptMs,
+          receivedAtMs: receiptMs,
         }),
         status: response.status,
       };
@@ -133,10 +144,14 @@ export function createAdsbLolSource({
       );
       if (!response.ok) throw httpError(response, 'adsb.lol');
       const age = finite(header(response, 'x-ads-b-cache-age-ms'));
+      const receiptMs = now();
+      const observedAtMs = receiptMs - (age != null && age > 0 ? age : 0);
       return {
         ...readsbSnapshot(payload, {
-          observedAtMs: now() - (age != null && age > 0 ? age : 0),
-          now: now(),
+          observedAtMs,
+          sourceId: 'adsb.lol',
+          now: receiptMs,
+          receivedAtMs: receiptMs,
           stale: header(response, 'x-ads-b-cache') === 'STALE',
         }),
         status: response.status,

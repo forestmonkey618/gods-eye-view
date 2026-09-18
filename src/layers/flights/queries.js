@@ -812,6 +812,37 @@ export function createQueries({
     },
 
     /**
+     * I3a — Current aircraft position provenance sidecar — CURRENT only.
+     * Store-owned: returns current position provenance for THIS flights store,
+     * keyed by native icao24 (lowercased hex, preserves ~ for TIS-B), NOT entityKey.
+     * This avoids inventing a second identity system; canonical consumers can
+     * derive entityKey via aircraftEntityKey(icao24) if needed.
+     *
+     * - Returns Map<icao24, provenance descriptor> where descriptor is
+     *   {epistemic:'reported', sourceId, reportedAtMs, receivedAtMs}
+     * - Position = rawLat/rawLon/fix. Follows retained position: if position
+     *   retained due to absence, provenance remains old; if replaced, new.
+     * - TIS-B / noncanonical (entityKey:null) included, keyed by native id
+     *   (e.g., '~abc123'), no synthetic keys.
+     * - CURRENT only: no history, no previous provenance arrays.
+     * - Copy-safe: fresh Map per call, fresh plain object per descriptor.
+     * - getCurrentEntities() remains unchanged and provenance-unaware.
+     *
+     * @returns {Map<string, {epistemic:string, sourceId:string|null, reportedAtMs:number|null, receivedAtMs:number|null}>}
+     */
+    getProvenanceMap() {
+      const provMap = flightState.records.positionProvenance;
+      if (!provMap || provMap.size === 0) return new Map();
+      const out = new Map();
+      for (const [icao24, prov] of provMap) {
+        if (!prov) continue;
+        // Copy-safe: shallow copy, provenance descriptors are frozen but we return fresh object
+        out.set(icao24, { ...prov });
+      }
+      return out;
+    },
+
+    /**
      * Start camera-tracking an aircraft by ICAO24 address.
      * @param {string} icao24 - ICAO 24-bit transponder address.
      * @returns {boolean} True if the aircraft exists and tracking started.

@@ -11,6 +11,7 @@ import {
   LANDED_MISSING_POLL_LIMIT,
   MISSING_POLL_LIMIT,
 } from './recordPolicy.js';
+import { EPISTEMIC, createProvenance } from '../../data/provenance.js';
 
 /** Source-independent aircraft metadata and bounded missing-poll retention. */
 export class FlightRecords {
@@ -24,11 +25,21 @@ export class FlightRecords {
     this.missingPolls = new Map();
     this.geoidNCache = new Map();
     this.geoidReady = false;
+    // I3a: current position provenance sidecar — Map<icao24, provenance descriptor>
+    // Position = rawLat/rawLon/fix. CURRENT only, no history.
+    this.positionProvenance = new Map();
   }
 
   receive(
     observation,
-    { viewerLatDeg, viewerLonDeg, trackedId, floorWarmPoints },
+    {
+      viewerLatDeg,
+      viewerLonDeg,
+      trackedId,
+      floorWarmPoints,
+      sourceId,
+      receivedAtMs,
+    } = {},
   ) {
     const { geoidHeight, cachedGroundFloor, floorAltitudeM } = this.services;
     const {
@@ -255,6 +266,55 @@ export class FlightRecords {
       observation.positionTimeMs > 0
         ? observation.positionTimeMs
         : Date.now();
+
+    // I3a: position provenance — CURRENT only, follows rawLat/rawLon.
+    // Position is always present when observation admitted (coordinates check in normalize),
+    // but guard for future-proofing: only overwrite provenance when new valid position.
+    const hasValidPosition =
+      Number.isFinite(lat) && Math.abs(lat) <= 90 && Number.isFinite(lon) && Math.abs(lon) <= 180;
+    if (hasValidPosition) {
+      // sourceId and receivedAtMs come from snapshot (one receipt time per batch is more truthful than per-aircraft Date.now()).
+      // If not supplied (e.g., legacy tests), keep previous provenance or skip.
+      if (sourceId && Number.isFinite(receivedAtMs)) {
+        try {
+          const prov = createProvenance({
+            epistemic: EPISTEMIC.REPORTED,
+            sourceId,
+            reportedAtMs: Number.isFinite(observation.positionTimeMs) && observation.positionTimeMs > 0 ? observation.positionTimeMs : null,
+            receivedAtMs,
+          });
+          this.positionProvenance.set(icao24, prov);
+        } catch {
+          // Invalid provenance (e.g., bad sourceId) — do not store, preserve truthfulness by not inventing.
+        }
+      } else if (!this.positionProvenance.has(icao24)) {
+        // No sourceId/receipt supplied and no previous — try to create with what we have if possible (backward compat for tests without sourceId).
+        // If sourceId missing, we cannot create REPORTED, so leave absent (null provenance = unknown).
+      }
+      // If sourceId/receivedAtMs missing but previous provenance exists, retain it? No — position was replaced, so old provenance would be stale.
+      // In that case we delete old provenance to avoid lying that retained position is from old source when we actually have new position but no source info.
+      // Actually if we have new position but no source info, better to have no provenance than stale.
+      if ((!sourceId || !Number.isFinite(receivedAtMs)) && this.positionProvenance.has(icao24)) {
+        // Check if previous provenance's reportedAtMs matches this fix? If not, we have new position with unknown source — remove old to avoid mislabel.
+        // Only remove if we are in a path where source info should have been supplied but wasn't (i.e., new code path). For legacy tests without source, keep absent.
+        // To keep simple: if sourceId missing, delete provenance so we don't retain stale source.
+        if (sourceId == null && receivedAtMs == null) {
+          // Legacy test path — leave provenance absent, do not delete if we never had source-aware provenance?
+          // If we had previous source-aware provenance and now receive without source, that means caller is legacy — keep old? Actually new position arrived but caller didn't supply source — we should delete to avoid lying.
+          // However many existing tests call receive without source — they never had provenance, so deletion is no-op.
+          // For safety, if sourceId is explicitly null/undefined, we treat as unknown source path and remove any existing provenance that would otherwise claim old source for new position.
+          // This ensures source switch without replacement position does NOT falsely relabel retained position (handled by hasValidPosition guard).
+          // For hasValidPosition true but no source info, remove old provenance.
+          const hadProv = this.positionProvenance.get(icao24);
+          if (hadProv) {
+            // If we have no source info for this new position, we cannot truthfully say where it came from — remove.
+            this.positionProvenance.delete(icao24);
+          }
+        }
+      }
+    }
+    // If hasValidPosition false, retain previous provenance (do not overwrite) — invariant: provenance follows retained position.
+
     return { icao24, prevMeta, meta, groundFlipped, fixEpochMs };
   }
 
@@ -279,5 +339,6 @@ export class FlightRecords {
     this.data.delete(id);
     this.missingPolls.delete(id);
     this.geoidNCache.delete(id);
+    this.positionProvenance.delete(id);
   }
 }

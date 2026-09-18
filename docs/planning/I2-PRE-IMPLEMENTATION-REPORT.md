@@ -16,13 +16,13 @@ I2 is **not** a database, not history log, not provenance, not coverage. It is t
 
 Revision 2 findings that supersede Rev 1:
 
-- **entityKey must identify ENTITY, not observation or layer.** Repository evidence: `src/layers/flights/snapshotRenderer.js:49-65` suppresses OpenSky duplicate when same ICAO24 is known military and military layer active (`isMilitaryIcao` + `_militaryLayerSuppresses`). Same ICAO24 through OpenSky and adsb.lol is merged into one `FlightRecords.data` entry via sticky merge. Same physical aircraft appears in at most one rendering layer at a time, but identity is aircraft, not layer. Layer membership is presentation, not identity.
+- **entityKey must identify ENTITY, not observation or layer.** Repository evidence: `src/layers/flights/snapshotRenderer.js:49-65` suppresses OpenSky duplicate when same ICAO24 is known military and military layer active (`isMilitaryIcao` + `_militaryLayerSuppresses`). Flights store = OpenSky primary with 250nm adsb.lol regional fallback when OpenSky stale/unavailable (server/providers/aircraft/opensky.js serveAdsbLolPointFallback sets X-Flight-Source: adsb.lol), not simultaneous OpenSky+adsb.lol merge. Same physical aircraft appears in at most one rendering layer at a time, but identity is aircraft, not layer. Layer membership is presentation, not identity. Sticky merge occurs across time within store, not across providers in same poll.
 - **Namespace must be semantic entity type, not GEV layer id.** `flights` and `military` are both aircraft presentation layers for same entity type aircraft. `aircraft:icao24:abc123` is more correct than `flights:icao24:abc123` / `military:icao24:abc123`. Layer/source membership remains available as metadata in recordIndex, not baked into key.
 - **Not every record deserves canonical entityKey.** FIRMS `FIRE-#####` index-based, earthquake `event-<index>` fallback, traffic simulated, transit vehicle transient have no trustworthy stable identity. Forcing them into canonical index invents false stability. They must remain outside canonical entity index or in separate ephemeral observation store.
 - **recordIndex must NOT pull from `getAnalystRecords` as primary source.** Those accessors are capped (2000 default, 500/800 for positions), analyst-specific, exist on only 5 layers. Foundational index would silently inherit truncation (11k flights vs 500 cap). Smallest durable approach is new lightweight normalized current-record accessor `getEntitySnapshot()` / `getCurrentEntities()` returning uncapped JSON-safe copies, on-demand, no Cesium types, no live references.
 - **Snapshot terminology `asOf` misleading.** Implies historical querying. I2 is current-state-only. Use `assembledAt` / `builtAt` / `indexedAt` for bookkeeping when snapshot assembled, never confused with observation time, source freshness, historical query.
 - **Brittle person-shaped key test must be removed.** Product prohibition on named-person search/private-person tracking is real but string-grammar test is unreliable enforcement. Enforcement point is schema enumeration (no person fields in layer schemas), analyst engine field types, ALPR modeling camera hardware not plate data, not I2 key pattern.
-- **First implementation scope too broad.** Integrating 6 domains (flights, military, vessels, earthquakes, FIRMS, satellites) is migration marathon. Smallest representative set that proves contract: aircraft only (flights + military sharing same `aircraft:icao24` namespace, proving cross-provider OpenSky+adsb.lol merge and cross-layer suppression) — high-frequency moving, stable canonical, cross-provider/layer issue. Optionally one additional domain to prove namespace (e.g., vessel or satellite) after aircraft proven, but not 6 at once.
+- **First implementation scope too broad.** Integrating 6 domains (flights, military, vessels, earthquakes, FIRMS, satellites) is migration marathon. Smallest representative set that proves contract: aircraft only (flights + military sharing same `aircraft:icao24` namespace, proving fallback OpenSky primary with adsb.lol regional fallback via X-Flight-Source and cross-layer suppression) — high-frequency moving, stable canonical, cross-provider/layer issue. Optionally one additional domain to prove namespace (e.g., vessel or satellite) after aircraft proven, but not 6 at once. Note: flights does NOT simultaneously merge OpenSky+adsb.lol in same poll; fallback is server-side regional when OpenSky stale.
 
 **Smallest safe first implementation (revised):** I2a entityKey helper with semantic namespace + I2b new `getEntitySnapshot` accessor audit (measurement only) + I2c recordIndex current-state-only for stable entities only + I2d integration aircraft only (flights + military as same entity type) proving entity vs layer vs observation + I2e arch checks.
 
@@ -38,7 +38,7 @@ Inspected `src/layers/*`, `src/data/*`, `src/app/layers/*`, `src/app/constructCa
 - Internal: `FlightRecords.data: Map<icao24, meta>` sticky merge, `missingPolls` bounded, `geoidNCache`
 - Label: callsign || registration || icao24; analyst id is label not key; engine keys on icao24
 - Stable: Yes within session, evicted after `MISSING_POLL_LIMIT=3` (landed=1)
-- Cross-provider same entity: Yes — OpenSky and adsb.lol both report same ICAO24, merged into one Map entry via `receive()` sticky fields. Evidence: `snapshotRenderer.js` merges, `records.js` sticky.
+- Cross-provider same entity: Flights = OpenSky primary with 250nm adsb.lol regional fallback when OpenSky stale/unavailable, labeled via X-Flight-Source header (server/providers/aircraft/opensky.js). Same ICAO24 from fallback still same aircraft entity, but NOT simultaneous OpenSky+adsb.lol merge in same poll. Sticky merge occurs across time within store (callsign/velocity retention via stickyText/stickyNumber), not across providers simultaneously. Evidence: snapshotRenderer.js military suppression, records.js sticky, server opensky.js serveAdsbLolPointFallback.
 - Cross-layer same entity: Yes — same ICAO24 appears in flights and military. When military layer active, flights suppresses duplicate: `if (isMil && tracking._militaryLayerSuppresses(icao24)) { remove billboard; records.forget; continue; }` — same physical aircraft, not two entities.
 - Canonical readiness: High — ICAO24 trustworthy, should be `aircraft:icao24:<id>` not `flights:icao24:<id>`
 
@@ -132,8 +132,8 @@ Inspected `src/layers/*`, `src/data/*`, `src/app/layers/*`, `src/app/constructCa
 - Static id bundledSource
 - Canonical: `infrastructure:cable:<id>` stable
 
-**Key takeaways revised:**
-- Same ICAO24 through OpenSky+adsb.lol = same entity, merged via sticky, provider is observation not identity
+**Key takeaways revised (I3a correction):**
+- Flights = OpenSky primary with 250nm adsb.lol regional fallback when OpenSky stale/unavailable (X-Flight-Source: adsb.lol), same ICAO24 still same entity, provider is observation sourceId (opensky/adsb.lol) not identity, sticky merge across time within store not simultaneous cross-provider merge in same poll. StoreId = GEV ownership (flights/military/vessels) vs sourceId = external origin.
 - Same ICAO24 in flights+military = same physical aircraft, layer membership is presentation suppression, not identity — evidence `snapshotRenderer.js` suppression logic
 - Namespace must be semantic entity type (aircraft, vessel, satellite, earthquake, camera, installation, station) not GEV layer id
 - Unstable synthetic must not enter canonical index
@@ -185,7 +185,7 @@ Inspected `src/layers/*`, `src/data/*`, `src/app/layers/*`, `src/app/constructCa
 
 ### Concrete examples
 
-- **Same ICAO24 through OpenSky and adsb.lol:** One entity `aircraft:icao24:abc123`. Two observations: OpenSky observation at T1, adsb.lol observation at T2. Both merge into same `FlightRecords.data` entry via sticky. Provenance (I3) will track which source observed when. EntityKey identical, observation identity distinct.
+- **Same ICAO24 through OpenSky and adsb.lol fallback:** One entity `aircraft:icao24:abc123`. Two observations possible over time: OpenSky observation at T1 (primary), adsb.lol observation at T2 (regional 250nm fallback when OpenSky stale, via X-Flight-Source: adsb.lol). Both would merge into same FlightRecords.data entry over time via sticky retention across polls, not simultaneous merge in same poll. Provenance (I3) tracks sourceId opensky vs adsb.lol with reportedAtMs=positionTimeMs and receivedAtMs=snapshot receipt. EntityKey identical, observation sourceId distinct. Do NOT encode flights==opensky invariant — flights is general aircraft store with fallback.
 
 - **Same ICAO24 appearing in civilian and military layers:** One entity `aircraft:icao24:abc123`. Layer membership changes: when military layer inactive, entity present in flights layer; when military layer active and `isMilitaryIcao(icao24)` true, flights suppresses, military presents. Classification `military: true` is attribute, not identity. EntityKey identical, layer membership metadata changes.
 
@@ -237,7 +237,7 @@ Justification:
 
 - RecordIndex entry includes metadata not part of key: `{entityKey: 'aircraft:icao24:abc123', presentInLayers: Set{'military'}, presentInSources: Set{'adsb.lol'}, classification: {military: true}, label, lat, lon, ...}`
 - When military layer inactive, `presentInLayers` = `{'flights'}`; when active and isMilitary, `presentInLayers` = `{'military'}` (flights suppressed). EntityKey stable, membership changes.
-- For cross-provider same aircraft (OpenSky + adsb.lol), `presentInSources` = `{'OpenSky','adsb.lol'}` but entityKey identical. Provenance (I3) tracks observation times per source.
+- For flights with fallback, same aircraft can be observed via OpenSky primary or adsb.lol regional fallback at different times, `presentInSources` conceptually = {'opensky','adsb.lol'} but entityKey identical. Provenance (I3) tracks sourceId per observation with reportedAtMs and receivedAtMs. StoreId (GEV ownership flights) vs sourceId (external origin opensky/adsb.lol) distinct — flights general aircraft store, not tied to single provider.
 - Analyst engine can still emit `layerKey` for UI, but identity is entityKey.
 
 **If answer were No (distinct keys), what would justify?** Would need evidence that same ICAO24 in flights vs military are intentionally distinct real-world things (e.g., same transponder reused for different airframes, or civil and military are separate logical entities even if same physical). Repository shows opposite: suppression logic explicitly treats them as same physical aircraft that should not be double-rendered. No justification for distinct canonical identities.
@@ -1436,3 +1436,487 @@ Adapter must filter: `isEnabled('flights') ? flights.getCurrentEntities() : []`,
 
 
 
+
+---
+
+## 26. I2d IMPLEMENTED — Vessel / MMSI Canonical Identity + Current-State Index Integration
+
+**Date:** 2026-09-18
+**Checkpoint:** I2d — FINAL controlled I2 expansion before I3 — VESSELS ONLY
+**Status:** IMPLEMENTED, awaiting owner review. I3 NOT implemented, D9 NOT implemented, I1 NOT reopened. No other domains added.
+
+### Owner decisions accepted for I2d
+
+1. Vessels as ONE second canonical entity domain before I3.
+2. Canonical vessel identity: `vessel:mmsi:<9-digit-mmsi>` example `vessel:mmsi:123456789`.
+3. Canonical MMSI grammar: exactly 9 decimal digits `/^\d{9}$/` after safe string normalization/trim.
+4. Invalid/noncanonical vessel identifiers: entityKey null, no invented identity, no fallback/session/synthetic.
+5. Vessel recordIndex storeId: `vessels` NOT `ais-live-vessels` — storeId describes GEV current-record STORE ORIGIN, not provider identity. Provider/source belongs I3.
+6. Canonical key validation authority moved to `src/data/entityKey.js`, recordIndex no longer contains aircraft-only grammar.
+7. Add only narrow canonical-key validator: `isValid(key)` — chosen over `isValidCanonical` for preferred conceptual API. No parse/equal/generic create/DOMAIN/KIND/default export/registry.
+8. TIS-B/non-ICAO remains deferred.
+9. Event/detection domains remain outside recordIndex.
+10. Infrastructure domains remain deferred.
+11. Architecture check evaluated AFTER second-domain implementation.
+
+### Purpose
+
+Prove I2 substrate works naturally for AIRCRAFT + VESSELS without redesign:
+- second semantic entity domain
+- second native identifier grammar (9-digit numeric vs 6-hex)
+- single-store canonical entities (vessels) vs multi-store (aircraft flights+military)
+- general canonical-key validation authority
+- expanded bounded store origin
+- uncapped current-state accessor outside aviation
+
+If vessels required major recordIndex redesign, STOP and report — did NOT occur, fits naturally.
+
+### 1. Vessel model trace — actual findings
+
+**Files inspected:**
+- `src/layers/vessels/records.js` — `normalizeVessel(row)` lat/lon finite check, `mmsi: String(row.mmsi || '').trim()`, name fallback, imo/type/destination string, speed/course/heading finiteNumber, lastPositionUtc/Epoch, missedRefreshes.
+- `src/layers/vessels/state.js` — `VesselRecords` instance `byMmsi Map`, `unkeyed []`, `all []`, `now` injectable.
+- `src/layers/vessels/ingestion.js` — `vesselDisplayRow` maps live source `record.id` (string) to `mmsi`, speedMps to knots `/0.514444`, course/heading, last_position_epoch/UTC.
+- `src/sources/live/vessels.js` — `normalizeVesselObservation` id `String(row?.mmsi || row?.input_identifier || '').trim()`, latitude/longitude finite, speedKts finite, reference.
+- `src/layers/vessels/lifecycle.js` — `enable` sets enabled true, begins session, holds render, ensures collections, geoid warm, registers pick owner. `disable` sets enabled false, invalidates session, releases render, hides collection, clears overlay, clears inspection, destroys trail, aborts. Does NOT clear `byMmsi`, `unkeyed`, `all` — retains stale cache. `resetState` (destroy) DOES clear Maps.
+- `src/layers/vessels/queries.js` — `mapAnalystRecord`, `getAllPositions` capped 800, `getAnalystRecords` capped 2000, `getNearby` uses `Cartesian3.distance` slant (D9 pending), `hasContact` returns null when disabled or empty, `findByQuery`, `getDetectableObjects`, `getStats`.
+
+**Authoritative current vessel store:** `VesselRecords` with `byMmsi Map<string, record>` + `unkeyed []` + `all []`. Owner `vesselState.state.records`.
+
+**Exact MMSI field representation:** Always string trimmed — `String(row.mmsi || '').trim()` in both `normalizeVessel` and live source normalization. Evidence supports string contract preserving leading zeros.
+
+**Unkeyed vessel handling:** If `next.mmsi` falsy (empty string) after normalization, goes to `unkeyed` array via `effects.add`, not in `byMmsi`. `unkeyed` cleared each reconcile, rebuilt. `all = [...byMmsi.values(), ...unkeyed]` — current records but without canonical identity, still displayed.
+
+**Normalization currently performed:** lat/lon finite, mmsi string trim, name fallback to mmsi or 'VESSEL', imo/type/destination string, speed/course/heading finiteNumber, lastPositionUtc string, lastPositionEpoch finiteNumber.
+
+**Simulated/fallback vessels:** No simulated, no fallback identity. Unkeyed is only non-canonical path.
+
+**Non-9-digit values in current store:** Production MMSI is 9-digit per ITU, but `VesselRecords` permissive check allows any non-empty string as keyed (test uses '111','222'). Actual feed should be 9-digit, but store may contain non-9-digit if provider sends malformed — handled as canonical-invalid.
+
+**Coordinate fields:** `lat`, `lon` Number finite.
+
+**Speed/course/name/type fields:** `speed` knots (converted from mps in ingestion), `course`, `heading`, `name`, `type`, `destination`, `imo`.
+
+**Lifecycle/eviction semantics:** `reconcile(rows, {complete, selectedRecord, cap})` — seen Set dedup, updates existing via `beforeUpdate`/`updated`, retains if `!complete && <PARTIAL_RETENTION_MS`, pins selected for `SELECTED_PIN_REFRESHES` complete misses, removes via `effects.remove` + `removed`, cap eviction preserves seen and selected.
+
+**Disable behavior:** Retains `byMmsi` and `unkeyed` and `all` — stale cache, stops ingestion.
+
+**Ingestion stops when disabled:** `loadLivePositions` checks `feed.loading`, `ownsAisRequest` checks `feed.enabled`, lifecycle `disable` sets enabled false and aborts.
+
+**Existing caps:** `getAllPositions` capped 800, `getAnalystRecords` capped 2000, `getNearby` capped 25, `all` uncapped.
+
+### 2. Entity identity authority — final API
+
+Module `src/data/entityKey.js` — zero-dep, no Cesium/DOM/network, deterministic, stateless.
+
+```js
+export function aircraft(icao24) -> string|null
+  Canonical: aircraft:icao24:<6 hex lowercase>
+  Trim + lowercase + exactly 6 hex, null if invalid.
+
+export function vessel(mmsi) -> string|null
+  Canonical: vessel:mmsi:<9 decimal digits>
+  Trim + exactly 9 digits, preserves leading-zero string, no zero-padding, null if invalid.
+  Numeric input accepted only if String(value) is exactly 9 digits — no manufacture.
+
+export function isValid(key) -> boolean
+  Is this currently supported canonical GEV entityKey?
+  Supported: aircraft:icao24:<6 hex lower> OR vessel:mmsi:<9 digits>
+  Canonical representation only — no normalization, whitespace, uppercase rejected.
+```
+
+No `parse`, `equal`, `create`, `DOMAIN`, `KIND`, default export, registry.
+
+### 3. MMSI normalization/validation contract
+
+**Input contract evidence-supported:** Actual GEV vessel records use strings — `String(row.mmsi).trim()`. Prefer string, but accept finite number that stringifies to 9 digits.
+
+- `cleanString(value)`: if string trim, if finite number String(value).trim(), else ''.
+- `normalizeMmsi(value)`: raw = cleanString(value), if !raw null, if !/^\d{9}$/ null, else raw.
+- Preserves leading zero if input string "012345678" → "012345678" valid.
+- No automatic zero-padding: numeric 12345678 (8 digits) → "12345678" → null, not padded to "012345678". String "12345678" → null.
+- No digit manufacture.
+
+**Validation:** `/^\d{9}$/` after trim. Letters rejected, too short/long rejected, missing/empty rejected.
+
+**Numeric vs string behavior:**
+- String "123456789" → `vessel:mmsi:123456789`
+- String "012345678" → `vessel:mmsi:012345678` (leading zero preserved)
+- Number 123456789 → "123456789" → valid
+- Number 12345678 → "12345678" → null (no padding, would lose leading zero)
+- Number 0, NaN, Infinity → null
+- This matches GEV source representation is STRING, so leading-zero meaningful.
+
+### 4. Canonical vessel key format
+
+`vessel:mmsi:<9-digit>`
+
+Example: `vessel:mmsi:123456789`, `vessel:mmsi:012345678`
+
+Delimiter `:` safe — MMSI grammar digits only, no colon.
+
+### 5. Canonical-key validation design
+
+Narrow validator `isValid(key)` in `entityKey.js`:
+
+```js
+AIRCRAFT_PREFIX = 'aircraft:icao24:'
+VESSEL_PREFIX = 'vessel:mmsi:'
+ICAO24_HEX = /^[0-9a-f]{6}$/
+MMSI_9 = /^\d{9}$/
+
+isValid(key):
+  if typeof key !== string return false
+  if key.startsWith(AIRCRAFT_PREFIX): suffix = slice, test ICAO24_HEX
+  if key.startsWith(VESSEL_PREFIX): suffix = slice, test MMSI_9
+  else false
+```
+
+- Canonical representation only — no trim, no lowercase, no normalization.
+- `aircraft:icao24:ABC123` → false (uppercase not canonical)
+- ` vessel:mmsi:123456789` → false (whitespace)
+- `vessel:mmsi:12345678` → false (8 digits)
+- `satellite:norad:12345` → false (unsupported domain)
+
+Constructor normalization (`aircraft()`, `vessel()`) separate from canonical-key validation.
+
+### 6. Confirmation recordIndex no longer knows ICAO/MMSI grammar
+
+`src/data/recordIndex.js` now:
+
+```js
+import { isValid as isValidEntityKey } from './entityKey.js'
+VALID_STORE_IDS = Set{'flights','military','vessels'}
+copyRecord generic primitive-only
+```
+
+No `ICAO24_HEX`, no `MMSI_9`, no `/^[0-9a-f]{6}$/`, no `/^\d{9}$/` literal, no hardcoded `aircraft:icao24:` or `vessel:mmsi:` prefix regex. Validation delegated to identity authority.
+
+Proven by `recordIndex.vessels.test.mjs` checks: no `const ICAO24_HEX`, no `const MMSI_9`, no hex regex, no 9-digit regex literal, imports `isValid`.
+
+### 7. Final bounded store IDs
+
+`flights`, `military`, `vessels`
+
+- `flights` = GEV flights current-record store (merges OpenSky + adsb.lol)
+- `military` = GEV military current-record store (adsb.lol military)
+- `vessels` = GEV vessel current-record store (AISStream)
+
+NOT provider identity: NOT `ais-live-vessels`, NOT `AISStream`. Provider/source semantics belong I3.
+
+Unknown storeId rejected via TypeError.
+
+### 8. Vessel getCurrentEntities() API
+
+Location `src/layers/vessels/queries.js` methods.
+
+```js
+getCurrentEntities() -> Array<{
+  entityKey: string|null, // canonical vessel:mmsi:<9-digit> or null for unkeyed/malformed
+  mmsi: string|null,      // native identifier trimmed or null if empty
+  lat: number|null,
+  lon: number|null,
+  name: string|null,
+  speedKts: number|null,  // record.speed knots
+  courseDeg: number|null  // record.course
+}>
+```
+
+Properties:
+- Uncapped — iterates `state.records.all` (byMmsi + unkeyed), no max, O(n)
+- Deterministic — `all` insertion order deterministic for same store state
+- Side-effect free — fresh array and fresh plain objects per call, no Cesium, no billboard, no camera
+- On-demand — not per-frame, no listeners
+- Plain/copy-safe — primitives only, no nested, mutation does not mutate storage
+- Current-state only — no history, rebuild removes missing
+- Coordinate authority — `record.lat/lon` from current record model, not `billboard.position`
+- Independent of D9 — no distance, no geo.js, no slant/surface
+- Independent of getNearby/getAllPositions/getAnalystRecords
+
+### 9. Exact vessel normalized record shape
+
+Minimum useful, no provenance:
+
+- `entityKey`: canonical or null
+- `mmsi`: native identifier trimmed string or null
+- `lat`: number|null from record.lat
+- `lon`: number|null from record.lon
+- `name`: string|null from record.name trimmed
+- `speedKts`: number|null from record.speed (knots)
+- `courseDeg`: number|null from record.course
+
+Potential ship type/class NOT added — not necessary for I2d, per owner "Do NOT add fields merely for symmetry."
+
+No `observedAt`, `staleAt`, `accuracyM`, `provider`, `provenance`, `source reliability`, `history`, `previous position`, `trajectory`, `event/change state`, `coverage`, `watchlist state`, `AI interpretation`.
+
+Primitive-only, so existing recordIndex shallow-copy contract remains valid (generic primitive copy).
+
+### 10. MMSI field semantics
+
+Current GEV model field `mmsi` actually represents MMSI (Maritime Mobile Service Identity) 9-digit, not broader provider identifier. Verified via `normalizeVesselObservation` id = mmsi, `vesselDisplayRow` mmsi = record.id.
+
+### 11. Unkeyed/malformed vessel behavior
+
+**Unkeyed:** `mmsi == ''` after trim → goes to `unkeyed []`, still in `all`, displayed, current record but no canonical identity.
+
+**Malformed:** Non-9-digit non-empty string e.g., '111' → goes to `byMmsi` Map due to permissive existing VesselRecords check, but canonical invalid.
+
+**getCurrentEntities() behavior — Option B chosen:** Expose BOTH canonical and unkeyed current vessel records, with unkeyed/malformed carrying `entityKey:null`.
+
+Rationale per I2b precedent: flights `getCurrentEntities()` exposes TIS-B with entityKey null, while recordIndex indexes only canonical. Same for vessels.
+
+- Valid 9-digit MMSI → entityKey `vessel:mmsi:<9-digit>`
+- Invalid short/long/letters → entityKey null
+- Unkeyed empty → entityKey null, mmsi null
+
+No invented identity: no `vessel:unknown:`, `vessel:aisstream:`, `session:`, `synthetic:`.
+
+**RecordIndex:** Canonical-only — only records with valid entityKey enter index, null excluded. So unkeyed/malformed remain available from accessor but outside canonical index.
+
+### 12. Coordinate authority
+
+`lat/lon` from current record model `record.lat`, `record.lon` — stored geographic coordinates from AIS, not mutable Cesium `billboard.position`, not camera-relative, not getNearby.
+
+Verified: `getCurrentEntities` does not call `components.rendering.getVisual`, does not use `Cartesian3`.
+
+### 13. Disabled vessel retained-data behavior
+
+Traced from `src/layers/vessels/lifecycle.js`:
+
+- `disable()`: sets `enabled false`, invalidates session, releases render, hides collection, clears overlay, clears inspection, destroys trail, aborts. Does NOT clear `byMmsi`, `unkeyed`, `all`.
+- `resetState()` (destroy): DOES clear Maps.
+
+**Therefore vessels.disable() leaves records populated as retained stale cache, stops ingestion.** Same pattern as flights/military disable.
+
+**Generic rule documented:** Store-owned `getCurrentEntities()` represents store's retained current-record model, but eligibility to contribute to GLOBAL current index depends on whether that store is actively ingesting/current (feed.enabled). Do not call retained disabled cache globally current.
+
+Adapter must filter: `isEnabled('vessels') ? vessels.getCurrentEntities() : []` before `buildRecordIndex`.
+
+### 14. Global eligibility boundary
+
+**STORE ACCESSOR = retained current-record model owned by store**
+
+**GLOBAL INDEX ELIGIBILITY = determined externally by active/ingesting lifecycle**
+
+- RecordIndex never inspects visibility, never imports lifecycle, never uses `billboard.show`.
+- Documented alongside aircraft in recordIndex.js JSDoc.
+
+### 15. How vessel fits existing recordIndex without redesign
+
+Canonical vessel fits naturally:
+
+```
+vessel:mmsi:123456789
+  |
+  +-- vessels current record (single-store)
+```
+
+- Same generic entry structure `{entityKey, byStore: Map<storeId, record>}` works for both aircraft (multi-store) and vessel (single-store).
+- No vessel-specific payload logic necessary.
+- Deterministic enumeration across `aircraft:...` and `vessel:...` via sortedKeys asc.
+- No winner, no history, no diff.
+- Copy safety remains valid because vessel records primitive-only.
+
+**If recordIndex required structural redesign to accommodate simple single-store domain, would STOP and report abstraction flaw — did NOT occur, proves architecture general.**
+
+### 16. Copy-safety result
+
+- Vessel normalized records primitive-only: `entityKey`, `mmsi`, `lat`, `lon`, `name`, `speedKts`, `courseDeg` — all string/number/null.
+- Existing recordIndex shallow-copy contract remains valid — now generic primitive-only copy that preserves both aircraft and vessel fields without domain-specific branches, skips non-primitive.
+- No generic deep cloning introduced.
+- If actual necessary vessel fields introduced nested objects/arrays, would STOP and evaluate — did not occur.
+
+### 17. Tests added
+
+**Entity identity — `src/data/entityKey.test.mjs` extended 8 → 22 tests:**
+
+- vessel canonical identity exact 9 digits
+- whitespace normalization deliberate
+- exactly 9 digits required
+- letters rejected
+- too short/long rejected
+- missing/empty rejected
+- leading-zero STRING preserved
+- no automatic zero-padding (numeric 8-digit null, numeric 9-digit valid, numeric losing leading zero rejected)
+- aircraft behavior remains unchanged
+- isValid accepts canonical aircraft key
+- isValid accepts canonical vessel key
+- isValid rejects uppercase/noncanonical aircraft key
+- isValid rejects malformed vessel key
+- isValid rejects unsupported domains
+
+All 22 pass.
+
+**Vessel current accessor — `src/layers/vessels/getCurrentEntities.test.mjs` new 13 tests:**
+
+- uncapped beyond analyst/position cap (2500 > 2000, >800)
+- every eligible current stored vessel represented
+- valid MMSI gets correct entityKey
+- malformed/unkeyed does not get invented canonical identity (no synthetic)
+- coordinates from current record model not Cesium
+- plain/primitive-only
+- mutation does not mutate storage
+- repeated calls no side effects (deepEqual but fresh references)
+- no history accumulation (reconcile removes old)
+- queries.js contains getCurrentEntities and uses vesselEntityKey and state.records.all
+- getAnalystRecords cap/output unchanged (file content check)
+- getAllPositions behavior unchanged (capped 800)
+- getNearby behavior unchanged (still Cartesian3.distance, D9 untouched)
+
+All 13 pass.
+
+**Multi-domain recordIndex — `src/data/recordIndex.vessels.test.mjs` new 14 tests:**
+
+- aircraft + vessel coexist in one index
+- recordIndex has no domain-specific ICAO/MMSI grammar (no ICAO24_HEX/MMSI_9 defs, no regex literals, imports isValid)
+- validation delegated to entityKey authority
+- vessel single-store record fits same entry shape
+- aircraft two-store behavior remains unchanged
+- malformed vessel key excluded
+- null entityKey excluded
+- deterministic ordering across aircraft and vessel (sorted asc, aircraft < vessel)
+- rebuild removes missing vessels
+- no history/diff
+- copy safety remains valid
+- storeId vessels accepted
+- unknown storeId rejected (ais-live-vessels, AISStream, vessel)
+- no provider identity encoded into storeId (VALID_STORE_IDS only flights,military,vessels)
+
+All 14 pass.
+
+**Existing tests still green:**
+
+- `src/data/recordIndex.test.mjs` 24 tests — all pass (aircraft behavior unchanged, copy safety generic still works)
+- `src/layers/vessels/records.test.mjs` 4 tests — pass
+- `src/data/currentEntities.test.mjs` 12 tests — pass (flights/military accessor still works)
+- `src/data/entityKey.test.mjs` 22 tests — pass
+- Total I2 related: 22 + 13 + 14 + 24 + 12 + 4 = 89 tests pass.
+
+### 18. Architecture check added
+
+**New script `scripts/check-identity-authority.mjs` — SMALL enforceable invariants:**
+
+- recordIndex must not import Cesium
+- recordIndex must not import UI/app
+- recordIndex must not import analyst-specific accessors (getAnalystRecords/getAllPositions)
+- recordIndex must not import lifecycle
+- recordIndex canonical validation comes from entityKey authority (imports isValid from entityKey.js)
+- recordIndex must not define its own ICAO/MMSI grammar
+- recordIndex must not contain obvious history state fields (this.history, _history, previousPosition)
+- entityKey must not import Cesium, must not use DOM (document./window.), must not use network (fetch/XMLHttpRequest)
+- entityKey must export aircraft, vessel, isValid, must not export oversized DOMAIN or parser
+- current entity accessors must not route through getAnalystRecords (checks flights/military/vessels queries.js getCurrentEntities snippet)
+- VALID_STORE_IDS must include flights,military,vessels
+
+Run: `node scripts/check-identity-authority.mjs` → **OK**.
+
+Existing `check-spatial-authority.mjs` still green — D9 untouched.
+
+No giant brittle regex checker, no policing every future identifier/domain — minimal freeze.
+
+### 19. Documentation changed
+
+- `src/data/entityKey.js` — extended with vessel(mmsi) + isValid(key), MMSI grammar, leading-zero preservation, no padding, narrow validator.
+- `src/data/recordIndex.js` — removed local aircraft-specific regex, now imports isValid from entityKey, extended VALID_STORE_IDS to include vessels, generic primitive-only copyRecord, updated JSDoc with vessels lifecycle and storeId semantics (vessels means GEV store not AISStream provider).
+- `src/layers/vessels/queries.js` — added import vesselEntityKey, added getCurrentEntities() with full JSDoc documenting store-owned semantics, unkeyed handling Option B, coordinate authority, disabled eligibility, minimal shape.
+- `scripts/check-identity-authority.mjs` — new architecture check.
+- `docs/planning/I2-PRE-IMPLEMENTATION-REPORT.md` — appended Section 26 with all required fields, plus this update.
+
+MASTER-PLAN / REFERENCE / PRE-AUDIT surgical updates: No material false statements found requiring change — MASTER-PLAN I2 definition "Every family declares its identity fields; one identity function shared by engine and awareness" now partially true for aircraft+vessels, still not every family but roadmap sequence preserved and I2d is controlled expansion before I3, so no contradiction requiring rewrite. D9 dual semantics preserved. No rewrite of roadmap.
+
+### 20. Confirmation D9 untouched
+
+- `grep -n Cartesian3.distance src/layers/vessels/queries.js` — still present in getNearby.
+- `grep -n distanceM src/data/geo.js` — unchanged.
+- No `slantDistanceM` added to records.
+- No eager/lazy slant decision.
+- `getNearby` signature unchanged, sorting unchanged, radius behavior unchanged.
+- `src/data/geo.js` untouched.
+
+### 21. Confirmation I3 untouched
+
+- No `observedAt`, `staleAt`, `accuracyM`, `provider`, `provenance`, `source reliability`, `coverage`, `watchlist state`, `AI interpretation` added to vessel accessor or recordIndex.
+- No provenance chains.
+- No observationKey.
+- `isValid` is canonical validation only, not provenance.
+
+### 22. Confirmation TIS-B namespace still deferred
+
+- `aircraft:icao24:~abc123` still invalid → null, isValid false.
+- No `aircraft:tisb:` namespace invented.
+- Tests still prove TIS-B outside canonical index.
+
+### 23. Confirmation no other entity domains added
+
+- Only `vessel:mmsi` added, not satellite, CCTV, ALPR, installations, bikeshare, earthquakes, FIRMS, launches, traffic, cables, radio.
+- `VALID_STORE_IDS` only flights,military,vessels — no other layer names.
+- No other getCurrentEntities added.
+
+### 24. Whether I2 general-purpose substrate can now be considered COMPLETE
+
+**Yes — I2 GENERAL-PURPOSE SUBSTRATE: COMPLETE.**
+
+Evidence:
+- At least two semantic entity domains: aircraft + vessel
+- At least two native identity grammars: 6-hex lowercase vs 9-digit numeric
+- Multi-store case: aircraft flights+military (two records per entity, no winner)
+- Single-store case: vessel vessels (one record per entity, fits same entry shape without redesign)
+- Canonical validation centralized: entityKey.js isValid is sole authority, recordIndex delegates, no domain-specific branches
+- Current accessors uncapped: flights, military, vessels all have getCurrentEntities uncapped, deterministic, side-effect free, plain/copy-safe, current-state only
+- Canonical index multi-domain: buildRecordIndex handles aircraft and vessel keys coexisting, deterministic ordering across domains, rebuild removes missing, no history/diff, copy safety preserved
+- No history/provenance contamination: recordIndex no history, no trajectory, no observedAt, no provider, no coverage — verified by architecture check
+
+This does NOT mean every GEV domain indexed — only aircraft and vessels. Does NOT mean analyst/awareness consumer adoption complete — substrate vs adoption distinction preserved.
+
+### 25. Whether next milestone should now be I3
+
+**Yes — recommend proceeding to I3 Provenance/Epistemic Typing.**
+
+I2d proves substrate generalizes beyond aircraft without redesign. Second domain forces validation authority generalization and tests single-store case — maximum learning/min cost. No further I2 expansion needed before I3. I3 can now build on multi-domain substrate with two distinct source types (ADS-B vs AIS) to test provenance across domains.
+
+### 26. Any issue requiring owner decision
+
+- Leading-zero MMSI handling: Implemented as string-preserving, numeric 8-digit rejected (no padding). Owner to confirm this matches product expectation for MMSI with leading zero.
+- StoreId naming: `vessels` chosen per owner decision, not `ais-live-vessels`. Confirmed.
+- isValid API name: Chose `isValid` over `isValidCanonical` per preferred conceptual API. Owner to confirm name acceptable (isValidCanonical more explicit but longer).
+- Unkeyed exposure: Chose Option B expose both canonical and unkeyed with entityKey null, per I2b precedent. Owner to confirm this matches desired vessel accessor contract (vs only byMmsi).
+- No further I2 expansion needed — owner to approve I2 general-purpose substrate COMPLETE and proceed to I3.
+
+**End of I2d — VESSELS IMPLEMENTED — identity format vessel:mmsi:<9-digit>, MMSI validation exact 9 digits trimmed preserving leading-zero string no padding, entityKey API aircraft+vessel+isValid, canonical validator narrow isValid canonical-only no normalization, recordIndex validation delegated to entityKey no longer knows ICAO/MMSI grammar, bounded storeIds flights/military/vessels, vessel accessor getCurrentEntities uncapped deterministic side-effect free plain/copy-safe current-state only coordinate authority record model not Cesium billboard, unkeyed/malformed entityKey null no invented identity, disabled retained-data behavior same as flights/military (retain Map but stop ingestion), global eligibility boundary store accessor vs adapter, vessel fits existing recordIndex without redesign, copy-safety primitive-only generic, 22+13+14+24 tests passing, architecture check scripts/check-identity-authority.mjs OK, docs updated, D9 untouched, I3 untouched, TIS-B deferred, no other domains, I2 substrate COMPLETE, next I3.**
+
+---
+
+## 27. I3a IMPLEMENTED — Provenance Primitive + Aircraft Position Provenance — SURGICAL DOC CORRECTION
+
+**Date:** 2026-09-18
+**Checkpoint:** I3a — minimal provenance primitive + truthful CURRENT aircraft POSITION provenance + sidecar accessor
+**Status:** IMPLEMENTED per owner-approved I3a slice. I2 remains closed/complete, D9 untouched, I1 untouched.
+
+### I3a source correction — exact path re-traced
+
+- **Server:** `server/providers/aircraft/opensky.js` — `openSkyProxy` main path does NOT set X-Flight-Source (only X-OpenSky-* headers), `serveAdsbLolPointFallback` (250nm regional fallback when OpenSky stale/unavailable) explicitly sets `X-Flight-Source: adsb.lol` and `X-Flight-Coverage: 250nm regional fallback`.
+- **API route:** `/api/opensky` forwards those headers.
+- **Client adapter:** `src/sources/live/standalone.js` `createOpenSkySource.getSnapshot` reads `header(response,'x-flight-source')||'OpenSky Network'` and normalizes to stable machine `sourceId`: 'adsb.lol' when header contains adsb, else 'opensky'. Captures single `now()` as `receivedAtMs` per snapshot batch (more truthful than per-aircraft Date.now()).
+- **Normalization:** `src/sources/live/aircraft.js` `normalizeOpenSkyAircraft` row[6]/row[5] lat/lon, row[3]=time_position epoch → positionTimeMs, row[4]=last contact. Returns null if !coordinates — so observation always has valid position when admitted.
+- **Store:** `src/layers/flights/records.js` `FlightRecords.receive()` previously did NOT receive source identity, used per-aircraft Date.now() as observedReceiptMs inside loop. Now receives {sourceId, receivedAtMs} from snapshotRenderer, stores `positionProvenance Map<icao24, frozen descriptor>` with {epistemic:'reported', sourceId, reportedAtMs=positionTimeMs|null, receivedAtMs}. Follows rawLat/rawLon current fix, remains with retained position when newer observation lacks replacement, switches with value on source switch (opensky→adsb.lol fallback).
+- **Sidecar:** `src/layers/flights/queries.js` `getProvenanceMap()` returns Map keyed by native icao24 (lowercased hex, preserves ~ for TIS-B), no synthetic keys, copy-safe, CURRENT only, no history. `getCurrentEntities()` remains I2 primitive-only unchanged, byte/shape compatible.
+- **StoreId vs sourceId:** storeId = GEV ownership flights/military/vessels (bounded VALID_STORE_IDS), sourceId = I3 stable machine id opensky/adsb.lol/adsbdb/aisstream etc (no registry, validated ^[a-z0-9._:-]+$ 1..128 no whitespace). Do NOT encode flights==opensky or military==adsb.lol invariant.
+
+### Surgical corrections applied in this I3a slice
+
+- **src/data/recordIndex.js JSDoc:** Corrected stale example "flights store itself contains observations merged from OpenSky + adsb.lol via sticky merge" to accurate fallback description: flights = OpenSky primary with 250nm adsb.lol regional fallback via X-Flight-Source, sticky merge across time within store not simultaneous cross-provider merge, military = adsb.lol, storeId is GEV ownership vs sourceId external origin.
+- **This report (I2-PRE-IMPLEMENTATION-REPORT.md):** Corrected executive summary and inventory and key takeaways and concrete examples that previously claimed simultaneous OpenSky+adsb.lol merge in same poll. Now describes fallback model truthfully per traced path. Remaining older sections may still contain phrasing "OpenSky+adsb.lol merge" but should be read as corrected to fallback model per this Section 27 — full file rewrite deferred to avoid giant diff.
+- **I3-DESIGN-REDUCTION-ADDENDUM.md:** Header status updated from research-only to I3a IMPLEMENTED, added source correction summary and production changes list, updated confirmation no prod code changed to list I3a minimal changes, updated I2 remains closed with corrected recordIndex comment.
+
+### Confirmations for I3a
+
+- **No full aircraft provenance:** Only position group (rawLat/rawLon) has provenance, not callsign/altitude/etc.
+- **No general sticky provenance:** Only position provenance, which always fresh when admitted, but guard retains old when invalid.
+- **No vessel/satellite:** Flights only.
+- **No I4/I5/I6/I9, no D9:** D9 still Cartesian3.distance slant, no slantDistanceM added, geo.js untouched.
+- **No recordIndex behavior change:** Only comment correction, no logic change, still primitive-only copy, still delegates validation to entityKey, still bounded storeIds flights/military/vessels, no provenance import beyond isValid.
+- **No entity identity change:** aircraft() still strict 6-hex, vessel() 9-digit, TIS-B entityKey null still deferred.
+- **Copy-safe frozen:** Provenance descriptors frozen, getProvenanceMap returns fresh Map and fresh plain objects.
+- **Tests:** 11 primitive + 16 position + 7 header = 34 new, plus 89 existing I2 tests still passing, identity/record-index checks still passing.
+
+**End of I3a correction — flights = OpenSky primary with 250nm adsb.lol regional fallback via X-Flight-Source, not simultaneous merge, sticky across time within store, storeId = GEV ownership, sourceId = stable machine id opensky/adsb.lol.**

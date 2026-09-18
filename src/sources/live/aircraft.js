@@ -75,8 +75,10 @@ export function openSkySnapshot(
   payload,
   {
     source = 'OpenSky Network',
+    sourceId = null,
     coverage = 'worldwide upstream snapshot',
     now = Date.now(),
+    receivedAtMs = null,
     stale = false,
   } = {},
 ) {
@@ -87,11 +89,26 @@ export function openSkySnapshot(
   );
   const observedAtMs = epoch(payload?.time, 1000);
   const ageMs = observedAtMs == null ? null : Math.max(0, now - observedAtMs);
+  // I3a: stable machine sourceId and receipt time for provenance.
+  // receivedAtMs = client receipt of this snapshot (now if not supplied).
+  // sourceId = 'opensky' or 'adsb.lol' (from X-Flight-Source), not human label.
+  const resolvedReceivedAtMs =
+    Number.isFinite(receivedAtMs) && receivedAtMs > 0 ? receivedAtMs : now;
+  // Normalize sourceId: if explicit, use it; else derive from source label for backward compat.
+  let resolvedSourceId = sourceId;
+  if (!resolvedSourceId) {
+    const label = String(source || '').toLowerCase();
+    if (label.includes('adsb.lol') || label.includes('adsb')) resolvedSourceId = 'adsb.lol';
+    else if (label.includes('opensky')) resolvedSourceId = 'opensky';
+    else resolvedSourceId = null;
+  }
   return {
     ...admitted,
     source,
+    sourceId: resolvedSourceId,
     coverage,
     observedAtMs,
+    receivedAtMs: resolvedReceivedAtMs,
     ageMs,
     stale: stale || (ageMs != null && ageMs > 120000),
     freshness:
@@ -108,8 +125,10 @@ export function readsbSnapshot(
   {
     observedAtMs,
     source = 'adsb.lol',
+    sourceId = 'adsb.lol',
     coverage = 'military upstream snapshot',
     now = Date.now(),
+    receivedAtMs = null,
     stale = false,
   } = {},
 ) {
@@ -119,11 +138,15 @@ export function readsbSnapshot(
     'adsb.lol',
   );
   const ageMs = observedAtMs == null ? null : Math.max(0, now - observedAtMs);
+  const resolvedReceivedAtMs =
+    Number.isFinite(receivedAtMs) && receivedAtMs > 0 ? receivedAtMs : now;
   return {
     ...admitted,
     source,
+    sourceId,
     coverage,
     observedAtMs,
+    receivedAtMs: resolvedReceivedAtMs,
     ageMs,
     stale,
     freshness: observedAtMs == null ? 'unknown' : stale ? 'stale' : 'current',

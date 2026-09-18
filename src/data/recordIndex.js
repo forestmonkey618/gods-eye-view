@@ -1,18 +1,21 @@
 /**
- * I2c — Canonical Current-State Record Index — Aircraft only.
+ * I2c/I2d — Canonical Current-State Record Index — Aircraft + Vessels.
  *
  * Purpose: smallest deterministic current-state index that answers:
- * 1. Which canonical aircraft entities are currently represented?
+ * 1. Which canonical entities are currently represented?
  * 2. Given entityKey, which current store-owned records presently represent it?
  * 3. Enumerate current canonical entities deterministically/safely.
  *
  * NOT responsible for deciding which source observation is "truth".
  *
  * Conceptual model:
- * ONE CANONICAL ENTITY (aircraft:icao24:<id>) may have MULTIPLE CURRENT STORE-OWNED RECORDS:
+ * ONE CANONICAL ENTITY (aircraft:icao24:<id> or vessel:mmsi:<id>) may have
+ * MULTIPLE CURRENT STORE-OWNED RECORDS:
  *   aircraft:icao24:abc123
  *     +-- current record from flights store
  *     +-- current record from military store
+ *   vessel:mmsi:123456789
+ *     +-- current record from vessels store
  *
  * These are NOT two canonical entities, NOT history, NOT trajectory, NOT provenance.
  * They are CURRENT records presently exposed by independent stores for same entity.
@@ -21,11 +24,11 @@
  * - Zero-dependency, no Cesium, no DOM, no analystProviders, no UI, no lifecycle.
  * - Pull/current-snapshot model: rebuild fresh index from current accessors on demand.
  *   Old state cannot accidentally survive — strong no-history guarantee.
- * - Input contract: array of {storeId, records} where records are I2b normalized
- *   records {entityKey:string|null, icao24, lat, lon, altitudeM, callsign} primitive-only.
+ * - Input contract: array of {storeId, records} where records are I2b/I2d normalized
+ *   records {entityKey:string|null, ...primitive fields} primitive-only.
  * - Store origin is NOT entity identity. Kept OUTSIDE normalized record, known by adapter.
  * - Canonical-only: only records with valid entityKey enter index; entityKey:null excluded
- *   (TIS-B/non-ICAO remain available from I2b accessors but outside canonical index).
+ *   (TIS-B/non-ICAO, unkeyed vessels remain available from I2b/I2d accessors but outside canonical index).
  * - No arbitrary winner: same entityKey from two stores → ONE canonical entry with TWO
  *   store-owned records. No Map iteration order, layer visibility, active state,
  *   timestamp, callsign completeness, coordinate completeness, provider preference
@@ -35,7 +38,7 @@
  *   no history retained, no DEPARTED/UPDATED events, no previous coordinates.
  * - No timestamp winner logic, no primaryRecord/bestRecord.
  * - Copy/mutation safety: inputs shallow-copied at build, outputs return fresh copies.
- *   Safe because I2b normalized record contract is primitive-only (string/number/null).
+ *   Safe because I2b/I2d normalized record contract is primitive-only (string/number/null/boolean).
  *
  * Eligibility ownership:
  * - LAYER / ADAPTER determines whether its feed/store is actively current
@@ -43,9 +46,8 @@
  * - RECORD INDEX indexes explicitly supplied eligible current records only.
  * - Index never infers feed freshness from payloads, never checks billboard.show,
  *   never imports lifecycle.js, never makes visibility epistemic authority.
- * - Disabled stores retain their FlightRecords.data Map as stale cache but stop
- *   ingestion (interval cleared, refresh invalidated). Therefore
- *   getCurrentEntities() can expose retained disabled cache. Adapter must NOT pass
+ * - Disabled stores retain their data Map as stale cache but stop ingestion.
+ *   Therefore getCurrentEntities() can expose retained disabled cache. Adapter must NOT pass
  *   disabled stores to buildRecordIndex if global-current index is desired.
  *
  * Store lifecycle (traced from actual code):
@@ -55,63 +57,69 @@
  * - military.disable(): same — aborts active updates, hides show=false,
  *   releases models, clears tracking, sets militaryLayerActive false,
  *   removes preRender listeners, clears interval. Does NOT clear records.data.
- * - flights.destroy() / military.destroy() DO clear records.data.
- * - LayerLifecycle._runPeriodicUpdate only runs if entry.enabled && lifecycleState==='enabled'.
- *   So disabled = not ingesting, not refreshed.
+ * - vessels.disable(): sets enabled false, invalidates session, releases render,
+ *   hides collection, clears overlay, clears inspection, destroys trail, aborts.
+ *   Does NOT clear records.byMmsi Map or unkeyed — retains stale cache.
+ * - flights.destroy() / military.destroy() / vessels resetState() DO clear records.
  * - Rule generic: store-owned getCurrentEntities() represents store's retained
  *   current-record model, but eligibility to contribute to GLOBAL current index
  *   depends on whether that store is actively ingesting/current.
  *   Do not call retained disabled cache globally current.
  *
  * StoreId semantics:
- * - storeId means GEV current-record STORE ORIGIN (which FlightRecords instance
+ * - storeId means GEV current-record STORE ORIGIN (which records instance
  *   currently owns the record), not provider, not provenance, not entity type,
  *   not layer identity baked into entityKey, not source reliability.
- * - Example: flights store itself contains observations merged from OpenSky + adsb.lol
- *   via sticky merge — provider is observation identity (I3), storeId is current-record
- *   store origin (I2). Military store similarly may contain multiple provider observations
- *   merged. Store origin ≠ provider provenance. I3 will later handle provider provenance.
+ * - Example: flights store = OpenSky with 250nm adsb.lol regional fallback when
+ *   OpenSky stale/unavailable, labeled via X-Flight-Source header (server
+ *   providers/aircraft/opensky.js serveAdsbLolPointFallback sets
+ *   X-Flight-Source: adsb.lol). Sticky merge occurs across time within the
+ *   store (callsign/velocity retention), not simultaneous cross-provider merge
+ *   in same poll. Military store = adsb.lol. Provider is observation identity
+ *   (I3 sourceId), storeId is GEV ownership (I2). Vessels store = AISStream
+ *   observations. Store origin ≠ external source origin.
+ * - vessels means GEV vessel current-record store, not AISStream provider identity.
  *
  * Input trust boundary:
- * - I2b accessors getCurrentEntities() are trusted normalized producers: they call
- *   aircraft() which validates 6-hex and returns canonical entityKey or null.
- * - Core index defensively validates canonical form aircraft:icao24:<6-hex lowercased>
- *   to fail safely on malformed like "banana" or "foo:bar" and to ensure only
- *   canonical aircraft keys enter. Validation is local to I2c (regex) to avoid
- *   duplicating full entityKey API, but mirrors I2a canonical rule.
+ * - I2b/I2d accessors getCurrentEntities() are trusted normalized producers: they call
+ *   aircraft() / vessel() which validate and return canonical entityKey or null.
+ * - Core index defensively validates via entityKey.js isValid() to fail safely on
+ *   malformed like "banana" and to ensure only canonical keys enter. Validation
+ *   delegated to identity authority — recordIndex no longer knows ICAO24 or MMSI grammar.
  *
  * @module data/recordIndex
  */
 
-// Bounded store identifiers for this checkpoint only — GEV current-record store origin.
+import { isValid as isValidEntityKey } from './entityKey.js';
+
+// Bounded store identifiers — GEV current-record STORE ORIGIN.
 // Not provider, not provenance, not entity type.
-const VALID_STORE_IDS = new Set(['flights', 'military']);
-
-// Canonical aircraft:icao24:<6-hex> validation — mirrors I2a authority aircraft().
-// I2b is trusted producer, but we validate defensively to avoid "banana" entering index.
-const ICAO24_HEX = /^[0-9a-f]{6}$/;
-const CANONICAL_PREFIX = 'aircraft:icao24:';
-
-function isValidEntityKey(key) {
-  if (typeof key !== 'string') return false;
-  if (!key.startsWith(CANONICAL_PREFIX)) return false;
-  const suffix = key.slice(CANONICAL_PREFIX.length);
-  return ICAO24_HEX.test(suffix);
-}
+const VALID_STORE_IDS = new Set(['flights', 'military', 'vessels']);
 
 function copyRecord(rec) {
-  // I2b records are primitive-only: string/number/null. Shallow copy sufficient TODAY.
-  // Documented as safe because normalized I2b contract is primitive-only.
-  // Do NOT imply generic deep-clone safety for future nested records.
+  // I2b/I2d records are primitive-only: string/number/null/boolean. Shallow copy
+  // sufficient TODAY. Generic primitive-only copy preserves both aircraft and
+  // vessel fields without domain-specific branches. Skips non-primitive to keep
+  // copy-safety contract explicit. Do NOT imply generic deep-clone safety.
   if (!rec || typeof rec !== 'object') return null;
-  return {
-    entityKey: rec.entityKey ?? null,
-    icao24: rec.icao24 ?? null,
-    lat: Number.isFinite(rec.lat) ? rec.lat : rec.lat ?? null,
-    lon: Number.isFinite(rec.lon) ? rec.lon : rec.lon ?? null,
-    altitudeM: Number.isFinite(rec.altitudeM) ? rec.altitudeM : rec.altitudeM ?? null,
-    callsign: rec.callsign ?? null,
-  };
+  const out = {};
+  for (const [key, value] of Object.entries(rec)) {
+    if (value === null) {
+      out[key] = null;
+    } else if (
+      typeof value === 'string' ||
+      typeof value === 'number' ||
+      typeof value === 'boolean'
+    ) {
+      out[key] = value;
+    }
+    // Skip non-primitive (object/array/function) — preserves copy-safety contract
+  }
+  // Ensure entityKey at least present
+  if (!('entityKey' in out)) {
+    out.entityKey = rec.entityKey ?? null;
+  }
+  return out;
 }
 
 /**
