@@ -1283,275 +1283,152 @@ Additionally, TIS-B `~` identifiers remain outside canonical `aircraft:icao24` (
 
 ---
 
-## 25. I2c IMPLEMENTED — Canonical Current-State Record Index
+## 25. I2c IMPLEMENTED — Canonical Current-State Record Index (Final Review)
 
 **Date:** 2026-09-18  
-**Checkpoint:** I2c — CANONICAL CURRENT-STATE RECORD INDEX  
-**Status:** IMPLEMENTED, awaiting owner review. I3 NOT implemented, I9 NOT implemented, D9 NOT implemented, I1 NOT reopened. No additional domains.
+**Checkpoint:** I2c — CANONICAL CURRENT-STATE RECORD INDEX — FINAL CONTRACT REVIEW  
+**Status:** IMPLEMENTED, minimized API, awaiting owner approval. I3 NOT implemented, I9 NOT implemented, D9 NOT implemented, I1 NOT reopened. No additional domains, no new consumers wired.
 
-### Actual recordIndex module / API
+### Final minimized public API
 
-Module: `src/data/recordIndex.js` — zero-dependency, no Cesium, no DOM, no analystProviders, no UI, no lifecycle, deterministic, stateless, allocation-light (primitives only).
+Module: `src/data/recordIndex.js` — zero-dependency, no Cesium, no DOM, no analystProviders, no UI, no lifecycle, deterministic, stateless.
 
 ```js
-import { buildRecordIndex, buildAircraftRecordIndex, STORE_ID } from './recordIndex.js'
-
-STORE_ID = { FLIGHTS: 'flights', MILITARY: 'military' } frozen — bounded identifiers for this checkpoint only.
+import { buildRecordIndex } from './recordIndex.js'
 
 buildRecordIndex(collections) -> RecordIndex
   collections: Array<{storeId: 'flights'|'military', records: Array<I2b normalized>}>
-  Throws TypeError if collections not array or storeId invalid (bounded).
-  Rebuilds fresh index from current accessors on demand — old state cannot survive.
+  Valid storeId: 'flights' | 'military' — GEV current-record STORE ORIGIN, not provider.
+  Throws TypeError if collections not array or storeId invalid.
+  Rebuilds fresh index from explicitly eligible current-store collections — old state cannot survive.
 
-buildAircraftRecordIndex({flightsRecords, militaryRecords}) -> RecordIndex
-  Convenience wrapper for aircraft: takes two I2b arrays already filtered to current.
-  Does NOT check visibility itself — caller adapter must exclude disabled stores if their
-  getCurrentEntities() would return retained stale cache.
-
-RecordIndex API (frozen):
+RecordIndex (frozen):
   get(entityKey) -> {entityKey, records: [{storeId, record}]} | undefined — fresh copy
-  has(entityKey) -> boolean
-  size -> number (canonical entities count)
-  values() -> Array<{entityKey, records}> deterministic sorted by entityKey ascending, each fresh copy, store ordering alphabetical flights before military
-  keys() -> Array<string> sorted entityKeys
-  _contributingStores() -> Array<string> sorted storeIds that contributed (debug)
+  has(entityKey) -> boolean — O(1) existence without allocation
+  size -> number — canonical entities count
+  values() -> Array<{entityKey, records}> — deterministic sorted entityKey asc, each fresh copy, inner storeId alphabetical flights before military
 ```
 
-No parse, equal, historical lookup, previous, diff, subscribe, watch, timeline, generic query language, AI, persistence.
+No `keys()`, no `_contributingStores()`, no `buildAircraftRecordIndex()`, no `STORE_ID` export, no parse/equal/history/diff/subscribe.
 
-### Canonical entity entry shape
+### APIs removed and why
 
-```js
-{
-  entityKey: 'aircraft:icao24:a1b2c3', // canonical I2a
-  records: [
-    { storeId: 'flights', record: {entityKey, icao24, lat, lon, altitudeM, callsign} },
-    { storeId: 'military', record: {entityKey, icao24, lat, lon, altitudeM, callsign} }
-  ]
-}
-```
+| API | Production consumer | Test-only consumer | Why removed |
+|---|---|---|---|
+| `buildAircraftRecordIndex({flightsRecords,militaryRecords})` | none | 1 test | Convenience wrapper that unions arrays without lifecycle eligibility — misleading, implies authoritative current aircraft state while cannot distinguish CURRENT military records from retained disabled cache. Creates footgun. Removed per Option A: keep pure builder over explicitly eligible collections. |
+| `STORE_ID` export | none | tests used constants | Bounded identifiers still enforced internally via `VALID_STORE_IDS Set{'flights','military'}`, but export not needed for core. Valid strings documented in JSDoc. Removes speculative constant export when no production consumer. |
+| `keys()` | none | 1 test (deterministic enumeration) | Convenience — derivable from `values().map(v=>v.entityKey)`. Not needed for minimal contract. |
+| `_contributingStores()` | none | none (not used) | Leading-underscore method on public object suspicious — debug only, not needed. Removed. |
 
-- One canonical entry per entityKey
-- Zero or more current store records associated (normally 1, during overlap 2)
-- At most one per store per entityKey — enforced via inner Map<storeId, record>, last wins within same store if duplicate input (deterministic, store semantics guarantee at most one normally)
-- No arbitrary winner: same entityKey from two stores → ONE entity with TWO records preserved independently
-- No history, no previous snapshots, no provenance interpretation
+Kept `has()` because O(1) existence check without allocating copy via `get()`. Kept `size` for count without enumeration. Kept `get` and `values` as core.
 
-### Store-record representation
+### Whether buildAircraftRecordIndex remains and why
 
-I2b normalized record copied:
+**Removed.** Reason: disabled-store footgun. Wrapper took `{flightsRecords, militaryRecords}` and unioned without eligibility info. Both `flights.getCurrentEntities()` and `military.getCurrentEntities()` can expose retained disabled cache (see lifecycle below). Wrapper's name implied authoritative current aircraft state but had no way to distinguish current vs retained cache. Cleanest boundary: remove wrapper, keep `recordIndex` as pure builder over explicitly eligible current-store collections. Future adapter can explicitly filter eligibility before calling `buildRecordIndex`. No lifecycle import into core, no visibility authority, no global singleton.
 
-```js
-{
-  entityKey: string, // canonical, same as entry key
-  icao24: string,    // native as stored, preserves ~ for TIS-B but those excluded from index
-  lat: number|null,
-  lon: number|null,
-  altitudeM: number|null, // barometric MSL meters — verified both stores same concept
-  callsign: string|null
-}
-```
+### Exact eligibility boundary
 
-Copy-safe: shallow copy at build, fresh copies on get/values.
+**LAYER / ADAPTER owns eligibility, RECORD INDEX owns indexing.**
 
-Store origin NOT inside record — kept as `storeId` outside record in `records` array element `{storeId, record}`. Preserves separation: store origin NOT entity identity, not provenance. Adapter knows which accessor produced each array.
+- **Layer/Adapter:** Determines whether its feed/store is actively current — e.g., `LayerLifecycle.isEnabled(layerId)` && `lifecycleState==='enabled'`. Only if actively ingesting/current, call `getCurrentEntities()` and include its array in collections passed to `buildRecordIndex`.
+- **Record Index:** Indexes explicitly supplied eligible current records only. Never infers freshness from payloads (`observedReceiptMs`, `lastContactEpochMs`, `positionTimeMs`), never checks `billboardCollection.show`, never imports `lifecycle.js`, never makes visibility epistemic authority. Input-agnostic: builds from whatever collections are passed, fails safe on null/malformed.
 
-### How same entityKey from two stores is represented
+Fits actual GEV architecture: `LayerLifecycle` owns enabled/disabled, periodic refresh `_runPeriodicUpdate` only when `enabled && lifecycleState==='enabled'`, interval management, `_invalidateRefresh`. Layers own `FlightRecords.data` Map. Adapter (future dataManager or explicit caller) checks lifecycle enabled before gathering records. Index remains pure.
 
-Example:
+### Flights disabled lifecycle (traced)
 
-```js
-buildRecordIndex([
-  {storeId: 'flights', records: [{entityKey:'aircraft:icao24:a1b2c3', icao24:'a1b2c3', lat:51.5, ...}]},
-  {storeId: 'military', records: [{entityKey:'aircraft:icao24:a1b2c3', icao24:'a1b2c3', lat:51.6, ...}]}
-])
-→ size 1
-→ get('aircraft:icao24:a1b2c3') = {
-    entityKey: 'aircraft:icao24:a1b2c3',
-    records: [
-      {storeId:'flights', record:{lat:51.5,...}},
-      {storeId:'military', record:{lat:51.6,...}}
-    ]
-  }
-```
+From `src/layers/flights/lifecycle.js`:
 
-Different payloads preserved independently — lat 51.5 vs 51.6, callsign BAW123 vs RCH123, etc. Not interchangeable.
+- `disable(viewer)`: `parts.controller._abortActiveUpdates()` aborts active fetch controllers, `_cancelPendingTrackingRestore()`, `billboardCollection.show=false`, `releaseContinuousRender('flights')`, `_releaseModels()`, `modelCollection.show=false`, `_clearTracking()`, `_destroyTrail()`, destroys click handler, removes `trackedEntityChanged` listener, `removeEventListener('keydown')`, `unregisterPickOwner('flights')`, clears `preRender`, `trackedModelPreUpdate`, `moveEnd` listeners.
+- **Does NOT clear `records.data` Map.** Only `destroy()` clears `records.data.clear()`.
+- `LayerLifecycle` disable path: `_invalidateRefresh(layerId, entry, 'layer-disabled')` invalidates refresh epoch, clears `intervalId`, sets `enabled=false`, `lifecycleState='disabled'`.
 
-### How arbitrary winner selection is prevented
+**Therefore flights.disable() leaves `FlightRecords.data` populated as retained stale cache, stops ingestion (interval cleared, refresh invalidated). `getCurrentEntities()` can expose retained disabled cache.**
 
-- No first-wins/last-wins across stores: internal Map keyed by entityKey, inner Map keyed by storeId, so both records retained. Collection order (flights first vs military first) does NOT overwrite — both kept.
-- Deterministic store ordering inside entry: alphabetical `flights` before `military` via `sort((a,b)=>a[0].localeCompare(b[0]))` — not winner, just deterministic array order for consumers.
-- No use of Map iteration order, layer visibility, active state, timestamp, callsign completeness, coordinate completeness, provider preference to decide best.
-- No `primaryRecord`/`bestRecord`/`preferredRecord`/`currentPosition` — consumers must explicitly inspect `records` array until later architecture defines deterministic/epistemic selection policy (I3/I9).
+### Military disabled lifecycle (traced)
 
-### How entityKey:null handled
+From `src/layers/military/lifecycle.js`:
 
-- Canonical-only index: records with `entityKey:null` excluded (skip).
-- They remain available from I2b accessors but do NOT enter canonical index.
-- Fail-safe: `isValidEntityKey` checks non-empty string contains `:`.
+- `disable(viewer)`: same pattern — `_abortActiveUpdates()`, `_cancelPendingTrackingRestore()`, `billboardCollection.show=false`, `releaseContinuousRender('military')`, `_releaseModels()`, `modelCollection.show=false`, `_clearTracking()`, `_destroyTrail()`, destroys click handler, removes listeners, `unregisterPickOwner('military')`, `setMilitaryLayerActive(false)`, clears preRender listeners.
+- **Does NOT clear `records.data` Map.** Only `destroy()` clears.
+- `LayerLifecycle` same invalidation.
 
-### Whether TIS-B enters index
+**Therefore military.disable() leaves `MilitaryFlightRecords.data` populated as retained stale cache, stops ingestion.**
 
-**No.** TIS-B `~abc123` has `entityKey:null` per I2a strict 6-hex, so excluded from canonical index per canonical-only rule. Remains outside until identity semantics deliberately resolved later. No ephemeral index, no session keys, no `aircraft:tisb:` namespace created.
+### Whether either disabled store can expose retained records
 
-### Current-state rebuild/reconciliation behavior
+**Yes — BOTH.** Flights and military disable retain `data` Map. So `flights.getCurrentEntities()` and `military.getCurrentEntities()` can both return retained disabled cache that is no longer actively refreshed.
 
-- **Rebuild model:** `buildRecordIndex` builds fresh Map each call — old state cannot accidentally survive. Preferred over incremental reconcile for simplicity and strong no-history guarantee.
-- **Removal:** Rebuild from new input removes entities no longer present in any store (size decreases). Example: idx1 has a1b2c3 and b2c3d4, idx2 rebuilt with only a1b2c3 → b2c3d4 gone, no tombstone.
-- **Store disappearance while preserving entity:** Flights had a1b2c3 + military had a1b2c3 → entry has 2 records. Rebuild where flights empty, military still has → entry remains with only military record. Rebuild where both empty → entity gone.
-- **No history retained:** No previous coordinates, no trajectories, no previous snapshots. Each build is current only. Verified by tests: idx1 lat 1, idx2 lat 2 → idx2 has lat 2, idx1 still lat 1 (immutable, no shared history).
-- **No diff/change events:** API has no subscribe/on/diff/events.
+**Generic rule:** Store-owned `getCurrentEntities()` represents store's retained current-record model (what store currently holds after sticky merge and missing-poll eviction), but **eligibility to contribute to GLOBAL current index depends on whether that store is actively ingesting/current**. Do not call retained disabled cache globally current.
 
-### Deterministic ordering contract
+Adapter must filter: `isEnabled('flights') ? flights.getCurrentEntities() : []`, same for military, before `buildRecordIndex`.
 
-- **Canonical entity enumeration:** Sorted by `entityKey` ascending via `[...internal.keys()].sort()` at build time. Deterministic regardless of input order or Map insertion order of underlying FlightRecords. `values()` returns array in that sorted order, `keys()` same.
-- **Store records under one entity:** Sorted by `storeId` alphabetical (`flights` before `military`) for deterministic public output.
-- **Performance:** Sorting 11k keys O(n log n) ~150k comparisons, once at build time, on-demand not per-frame, measured <500ms for 11k (test shows ~30-40ms in Node). Avoids repeated sorting on every trivial lookup (lookup is O(1) Map get, size O(1)).
+### Exact storeId semantics
 
-### Copy/mutation safety
+- `storeId` means **GEV current-record STORE ORIGIN** — which `FlightRecords` instance (flights or military) currently owns the record.
+- Not provider (`OpenSky` vs `adsb.lol`), not provenance, not entity type, not layer identity baked into `entityKey`, not source reliability.
+- Example: `flights` store itself contains observations merged from OpenSky + adsb.lol via sticky merge in `FlightRecords.receive()`. Provider is observation identity (I3 concern), storeId is current-record store origin (I2 concern). `military` store similarly merges but from adsb.lol only currently.
+- `storeId` is kept OUTSIDE normalized record as `{storeId, record}` to preserve separation: store origin ≠ entity identity, ≠ provenance. I3 will later handle observation/provider provenance.
 
-- **Build:** Each input record shallow-copied via `copyRecord` (primitives only) into internal `byStore Map`.
-- **Get:** Returns fresh object `{entityKey, records: [{storeId, record: copy}]}` — fresh array, fresh entry, fresh record copies.
-- **Values:** Returns fresh array of fresh entry copies, each with fresh records array and fresh record copies.
-- **Mutating returned result does not corrupt future lookups/enumeration** — proven by test: mutate get() result, second get() still original.
+### Exact malformed entityKey trust/validation contract
 
-No deep-clone of giant graphs — records contain primitives.
+**Trust boundary:**
 
-### Store identifier semantics
+- **Trusted producers:** I2b accessors `flights.getCurrentEntities()` and `military.getCurrentEntities()` call `aircraft(icao24)` which validates strict 6-hex and returns canonical `aircraft:icao24:<6-hex>` or null. So by contract they only produce canonical keys or null.
+- **Core defensive validation:** `recordIndex` validates canonical form `aircraft:icao24:<6-hex lowercased>` via local regex `/^[0-9a-f]{6}$/` with prefix check, to fail safely on malformed inputs like `"banana"`, `"foo:bar"`, `"aircraft:icao24:zzzzzz"` (non-hex), `"aircraft:icao24:ABC123"` (uppercase). Malformed excluded, does NOT enter index, size unchanged, no throw (except invalid storeId or collections not array which throw TypeError).
+- **Why not duplicate full entityKey API:** I2a currently exports only `aircraft()`, not `isValid` or `parse` (minimized). I2c needs defensive check to avoid `"banana"` entering canonical index if someone bypasses I2b. Smallest evidence-supported boundary: local regex mirroring I2a canonical rule, not generic parser, not duplicating full API. Documented as defensive.
+- **Result:** `entityKey:null` excluded, `"banana"` excluded, `"foo:bar"` excluded, `"aircraft:icao24:abc123"` accepted, `"aircraft:icao24:a1b2c3"` accepted, uppercase rejected (since I2b always lowercases).
 
-- Bounded identifiers: `flights`, `military` only for this checkpoint. `STORE_ID` frozen object, `VALID_STORE_IDS` Set validates, throws TypeError on invalid.
-- Not generic registry of every future layer, not arbitrary unvalidated IDs — prevents accidental API ambiguity.
-- Terminology reflects GEV current architecture: storeId = layer-owned store (`flights` FlightRecords, `military` MilitaryFlightRecords), not provider provenance. Provider provenance belongs I3. Store origin NOT entity identity, NOT encoded into entityKey.
+### Exact copy-safety contract
 
-### Disabled/inactive military-store behavior
-
-Traced from `src/layers/military/lifecycle.js` and `src/layers/flights/ingestion.js` and `src/data/lifecycle.js`:
-
-- `military.disable()`: `parts.controller._abortActiveUpdates()` aborts active fetch controllers, hides `billboardCollection.show=false`, `releaseContinuousRender`, `_releaseModels`, `_clearTracking`, `_destroyTrail`, destroys click handler, unregisters pick owner, `setMilitaryLayerActive(false)`, removes preRender listeners, clears intervalId. **Does NOT clear `records.data` Map.** So data remains as retained stale cache, not refreshed while disabled.
-- `LayerLifecycle._runPeriodicUpdate` only runs if `entry.enabled && lifecycleState==='enabled' && !destroying && !refreshing`. `disable()` sets `enabled=false` and clears interval, so periodic updates stop. Thus disabled store is NOT active/ingesting.
-- Same for flights disable.
-
-**Therefore disabled military retained data is NOT current per lifecycle (not ingesting, not refreshed). Should NOT count as CURRENT for canonical index.**
-
-**Narrowest way to exclude WITHOUT making visibility epistemic authority:**
-
-- Core `recordIndex` does NOT check `billboardCollection.show` or `isMilitaryLayerActive` — it is agnostic, builds from whatever collections passed.
-- Adapter that calls `getCurrentEntities()` must filter by store active/ingesting status (e.g., `lifecycle.isEnabled(layerId)` or `lifecycleState==='enabled'`) BEFORE passing to `buildRecordIndex`. This distinguishes `store active/ingesting` vs `layer visible` — disabled = not ingesting, so excluded, not because visibility false but because ingestion stopped. Visibility and ingesting are currently coupled (disable hides AND stops ingestion), but using enabled state is more correct than using show boolean.
-
-If disabled military data is retained stale cache, adapter excludes it. If future architecture decouples visibility from ingestion (e.g., hidden but still ingesting), adapter could include hidden but ingesting stores — core remains agnostic.
-
-No owner decision needed — repository evidence shows disabled = not refreshed, so not current. Policy: adapter must exclude disabled stores.
-
-### Whether layer visibility affects canonical truth
-
-**No.** Core index does NOT depend on visibility. It does NOT import `isMilitaryLayerActive` or check `show`. It builds from input collections. Visibility does NOT arbitrarily select payload. Test `visibility does not select payload` proves both records retained regardless of collection order.
-
-Adapter filtering by enabled/ingesting status is NOT visibility authority — it's ingestion authority. Canonical truth = currently ingesting stores' current records.
-
-### How real flights/military accessors integrate
-
-Real integration proven via:
-
-```js
-import { buildAircraftRecordIndex } from '../data/recordIndex.js'
-
-// Adapter (e.g., in future manager or dataManager) checks enabled state:
-const flightsRecords = lifecycle.isEnabled('flights') ? flightsModule.getCurrentEntities() : []
-const militaryRecords = lifecycle.isEnabled('military') ? militaryModule.getCurrentEntities() : []
-
-const index = buildAircraftRecordIndex({ flightsRecords, militaryRecords })
-// index.get('aircraft:icao24:a1b2c3') → {entityKey, records:[{storeId:'flights',...},{storeId:'military',...}]}
-```
-
-Current checkpoint establishes core + aircraft adapter input boundary without wiring into every consumer (analyst, awareness, cockpit, selection, watchlists, AOIs, share links remain untouched). Enough to prove flights+military accessors can populate index.
-
-### Whether recordIndex calls getAnalystRecords
-
-**No.** Verified via file content check and tests: `recordIndex.js` does NOT contain `getAnalystRecords` or `getAllPositions`. It pulls from I2b `getCurrentEntities()` uncapped accessor, not capped analyst accessors. Prevents silent truncation (11k vs 2000 cap).
-
-### Performance at ~11k
-
-Test `performance at ~11k`: build index from 11k flights records → size 11k, elapsed <500ms (measured ~30-40ms in Node), `values()` returns 11k sorted array. On-demand not per-frame, acceptable. No sorting on every lookup (get O(1), has O(1), size O(1), values O(n) copy + already sorted).
-
-### Tests added
-
-`src/data/recordIndex.test.mjs` — 22 tests, all passing, covering 20 requirements:
-
-1. One canonical record → one entity entry
-2. Same entityKey flights+military → one entity, two store records
-3. Different payloads same entityKey preserved independently
-4. Store enumeration order does not choose/overwrite payload (deterministic alphabetical store ordering)
-5. entityKey:null excluded
-6. TIS-B remains outside index
-7. Missing/malformed fail safely (null, undefined, {}, empty entityKey, invalid storeId throws, collections not array throws)
-8. Two different entityKeys separate
-9. Rebuild removes entities no longer present
-10. Rebuild removes store record disappeared while preserving entity from other store
-11. No history retained
-12. No diff/change events
-13. Returned data cannot mutate internals (get and values copies)
-14. Deterministic enumeration (keys sorted ascending, values same order, repeat deterministic)
-15. I2a still works
-16. Does not call getAnalystRecords / getAllPositions
-17. Does not depend on Cesium (no import from cesium, no Cartesian3/Cartographic)
-18. Does not depend on DOM/UI (no document./window./_viewer)
-19. Does not use timestamp winner (no observedReceiptMs/lastContactEpochMs/positionTimeMs/newest)
-20. Visibility does not select payload (both retained regardless of collection order)
-+ convenience `buildAircraftRecordIndex` and performance 11k.
-
-Existing I2a/I2b tests remain passing: `entityKey.test.mjs` 8 pass, `currentEntities.test.mjs` 12 pass, total 42 pass with recordIndex.
+- **I2b normalized record contract is primitive-only:** `{entityKey:string|null, icao24:string, lat:number|null, lon:number|null, altitudeM:number|null, callsign:string|null}` — all primitives, no nested objects, no arrays, no Cartesian3.
+- **Shallow copy sufficient TODAY:** `copyRecord` does shallow copy of those 6 primitives. Documented as safe because I2b contract is primitive-only. Do NOT imply generic deep-clone safety for future nested records. If future I2b adds nested fields, copy strategy must be revisited.
+- **Build-time copy + output-time copy:** Inputs shallow-copied into internal `byStore Map`, `get()` returns fresh object with fresh `records` array and fresh record copies, `values()` returns fresh array of fresh copies. Mutating returned does not corrupt future lookups — proven by test.
 
 ### Architecture check decision
 
-**Small architecture check justified now that recordIndex exists, but implemented via unit tests rather than separate static script.**
+**No new static `check-identity-authority.mjs` script added.**
 
-Invariants enforced via tests in `recordIndex.test.mjs`:
+- Existing checks: `check-spatial-authority.mjs`, `check-import-directions.mjs`, `check-package-boundaries.mjs` run via `check:boundaries`.
+- Current invariants already enforced via unit tests in `recordIndex.test.mjs`: no `from 'cesium'`, no `Cartesian3`, no `getAnalystRecords`/`getAllPositions`, no `document.`/`window.`, no `_viewer`, no `lifecycle` import, no `billboardCollection.show`, no `isMilitaryLayerActive`, no timestamp winner strings.
+- Module is zero-dependency except `entityKey.js` import — verified by file content.
+- Adding a small regex checker would follow conventions cleanly, but tests already cover same invariants and are run in CI via `node --test`. To avoid giant regex policy checker and extra maintenance, defer static check until multi-domain expansion justifies it. Documented as tests sufficient for aircraft-only checkpoint.
 
-- Must not import Cesium (checks no `from 'cesium'`, no `Cartesian3`)
-- Must not import analyst accessors (no `getAnalystRecords`, `getAllPositions`)
-- Must not depend on DOM/UI (no `document.`, `window.`, `_viewer`)
-- Must not contain history/trajectory/event semantics (no `subscribe`/`on`/`diff`/`events`, no timestamp winner logic `observedReceiptMs` etc.)
+### Files changed in final review
 
-Module boundaries sufficient: `src/data/recordIndex.js` zero-dependency, only imports `entityKey.js`. No Cesium, no lifecycle, no analystEngine, no UI. Tests reliably enforce dependency boundaries without giant regex police script. If future multi-domain expansion justifies separate `check-identity-authority.mjs`, can add, but current tests sufficient for aircraft-only checkpoint. Documented as tests sufficient, static check deferred.
+- `src/data/recordIndex.js` — minimized: removed `STORE_ID` export, removed `buildAircraftRecordIndex`, removed `keys()` and `_contributingStores()`, kept `buildRecordIndex` with `get/has/size/values`, added strict canonical validation `aircraft:icao24:<6-hex>` to prevent `"banana"` entering, documented eligibility ownership (layer/adapter vs index), documented generic disabled-retained-cache rule for both flights and military, documented storeId semantics (store origin not provider), documented copy-safety primitive-only boundary, zero-dependency maintained.
+- `src/data/recordIndex.test.mjs` — updated to minimized API: uses literal storeIds, removed `STORE_ID` and `buildAircraftRecordIndex` tests, removed `keys()` usage, added malformed `"banana"`/`"foo:bar"`/`"aircraft:icao24:zzzzzz"`/uppercase tests, added eligibility tests (adapter excludes disabled, retained cache not globally current), added storeId semantics test (store origin not provider, last-wins within same store), added final API surface minimal test, adjusted DOM/lifecycle checks to allow comment mentions but forbid actual imports/calls.
+- `docs/planning/I2-PRE-IMPLEMENTATION-REPORT.md` — Section 25 rewritten to final review with minimized API, removed APIs table, disabled footgun analysis, eligibility boundary, flights+military disabled lifecycle traces, storeId semantics, malformed trust boundary, copy-safety boundary, architecture check decision.
 
-### Deviations
+### Tests / results
 
-- **Shape example vs required:** Report example suggested `Map<entityKey,{entityKey,records:[{store,record}]}>` — implemented as `buildRecordIndex` returning frozen API with `get/has/size/values/keys` and internal `Map<entityKey,{byStore:Map}>` plus sorted keys. Same conceptual model, slightly richer API for determinism and copy safety, but minimal.
-- **Convenience wrapper:** Added `buildAircraftRecordIndex` to prove flights+military integration without hard-wiring global singletons — small, not generic plugin framework.
-- **StoreId validation:** Throws TypeError on invalid storeId — explicit bounded identifiers, prevents accidental ambiguity, not overengineered enum framework.
-- **Copy strategy:** Shallow copy at build + fresh copies on output — minimal reasonable, not deep-clone giant graphs.
+- `node --test src/data/recordIndex.test.mjs src/data/currentEntities.test.mjs src/data/entityKey.test.mjs` — **44 pass, 0 fail** (8 I2a + 12 I2b + 24 I2c final).
+- I2c 24 tests covering: one entity, same key two stores, different payloads preserved, order not winner, null excluded, TIS-B outside, malformed safe including `"banana"` and `"foo:bar"` and non-hex and uppercase, different keys separate, rebuild removes entities, rebuild removes store record preserves other, no history, no diff/events, mutation safety primitive-only, deterministic enumeration, I2a still works, no getAnalystRecords, no Cesium, no DOM/UI/lifecycle/billboard/isMilitaryLayerActive, no timestamp winner, visibility does not select payload eligibility owned by adapter, storeId is store origin not provider, eligibility retained disabled cache not globally current, performance 11k <500ms (~33ms), final API surface minimal.
 
 ### Confirmations
 
-- **No recordIndex file previously?** Now exists `src/data/recordIndex.js` — this IS I2c implementation, per checkpoint.
-- **I3 provenance NOT implemented:** No `observedAt`/`staleAt`/`accuracyM`/provenance chains, no timestamp winner logic, verified via file content.
-- **I9 transitions/history NOT implemented:** No DEPARTED/UPDATED/APPEARED/ENTERED_SCOPE/EXITED_SCOPE, no trajectories, no history retained, no diff events.
-- **D9 NOT implemented:** `getNearby` still `Cartesian3.distance` slant in flights/military, no `slantDistanceM`, `geo.js` untouched.
-- **I1 NOT reopened:** `src/data/geo.js` untouched.
-- **No additional identity domains:** Only `aircraft:icao24` via I2a, no `vessel:mmsi`, `satellite:norad`, etc., no `aircraft:tisb:` namespace.
-- **No TIS-B canonical identity:** TIS-B excluded from canonical index, remains outside until deliberately resolved.
+- **No I3 provenance:** No `observedAt`/`staleAt`/`accuracyM`/provenance chains, no timestamp winner logic — verified via file content checks.
+- **No I9 transitions/history:** No DEPARTED/UPDATED/APPEARED/ENTERED_SCOPE/EXITED_SCOPE, no trajectories, no history retained, no diff events.
+- **No D9:** `getNearby` still `Cartesian3.distance` slant in flights/military, no `slantDistanceM`, `geo.js` untouched.
+- **No additional domains:** Only `aircraft:icao24` via I2a, no `vessel:mmsi`, `satellite:norad`, etc., no `aircraft:tisb:` namespace.
+- **No new consumers wired:** No analyst, awareness, cockpit, selection, watchlists, AOIs, share links modified.
 
-### Whether I2 can now be considered complete
+### Whether any unresolved issue still blocks I2c approval
 
-**I2 aircraft substrate (I2a+I2b+I2c) is now complete for aircraft domain:**
+**No blocking issue.**
 
-- I2a: canonical identity authority `aircraft:icao24:<6-hex>` minimal API
-- I2b: per-store uncapped current accessors `flights.getCurrentEntities()` and `military.getCurrentEntities()` store-owned, copy-safe, raw coordinates
-- I2c: canonical current-state record index preserving multiple current store records per entityKey without arbitrary winner, canonical-only, current-state rebuild, deterministic ordering, copy-safe
+- Disabled-store footgun resolved by removing `buildAircraftRecordIndex` wrapper and documenting eligibility ownership: adapter must filter by `isEnabled`/`lifecycleState`, not core. Both flights and military retain data when disabled but stop ingestion — generic rule documented, tests prove adapter exclusion.
+- Malformed `"banana"` prevented by strict canonical validation `aircraft:icao24:<6-hex>`.
+- StoreId semantics clarified as store origin, not provider — example flights merging OpenSky+adsb.lol but storeId remains `flights`.
+- Copy-safety documented as primitive-only shallow copy sufficient today.
+- Architecture check decision explicit: tests sufficient, no new static script needed for aircraft-only checkpoint.
+- Multi-record-per-entity design accepted and preserved without arbitrary winner.
 
-**Full I2 multi-domain (vessels, satellites, CCTV, etc.) remains pending** per Revision 2 reduced scope — intentionally not expanded in this checkpoint. Future I2d would integrate additional domains proving namespace, but aircraft-only substrate now proves contract.
+**I2c ready for owner approval as minimal current-state index: one entry per canonical entityKey, multiple current store records per entity, no winner, canonical-only, rebuild model, deterministic ordering, copy-safe primitive-only, bounded storeIds flights/military validated internally, eligibility owned by layer/adapter, disabled retained cache not globally current.**
 
-**I2 can be considered complete for aircraft milestone, awaiting owner approval, with multi-domain expansion deferred to later I2 work if desired.**
+**End of I2c FINAL REVIEW — minimized API `buildRecordIndex` only with `get/has/size/values`, removed `buildAircraftRecordIndex`/`STORE_ID`/`keys()`/`_contributingStores()`, eligibility layer/adapter vs index, flights+military disable retain data but stop ingestion, storeId is store origin not provider, malformed trust boundary strict canonical, copy-safety primitive-only, no I3/I9/D9/additional domains, 24 tests passing.**
 
-### Issues requiring owner decision before accepting I2c
 
-- **Disabled-store filtering policy:** We determined disabled = not ingesting = not current, so adapter should exclude disabled stores. This is based on repository evidence (disable aborts updates, clears interval). If future architecture decouples visibility from ingestion (hidden but still ingesting), should hidden-but-ingesting count as current? Current coupling makes enabled check sufficient, but owner should confirm that canonical index should be based on ingestion active, not visibility.
-- **I2c reconciliation remains open by design:** We deliberately did NOT choose winner. Owner previously decided (critical I2c owner decision) to preserve multiple current records per entity. This implementation honors that. If future consumers need single authoritative position, owner decision needed for deterministic/epistemic selection policy (belongs to I3/I9, not I2).
-- **TIS-B identity:** Remains outside canonical index (entityKey null). Owner decision needed if separate namespace `aircraft:tisb:<id>` desired before I2c considered fully complete for all aircraft types.
-
-No blocking issue — disabled lifecycle safely classified as retained stale cache, not current, via ingestion active check at adapter boundary, not visibility authority inside core.
-
-**End of I2c — Canonical current-state record index `src/data/recordIndex.js` implemented, one entity may have multiple current store records, no arbitrary winner, canonical-only (null excluded), rebuild model, deterministic ordering sorted entityKey + alphabetical storeId, copy-safe, bounded storeIds flights/military, disabled stores excluded at adapter (not core), no getAnalystRecords, no Cesium/DOM, no timestamp winner, 22 tests passing, I3/I9/D9/I1 untouched, no additional domains.**
 
 
 

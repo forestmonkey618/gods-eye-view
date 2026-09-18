@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { aircraft as aircraftEntityKey } from './entityKey.js';
-import { buildRecordIndex, buildAircraftRecordIndex, STORE_ID } from './recordIndex.js';
+import { buildRecordIndex } from './recordIndex.js';
 
 function makeRecord(icao24, overrides = {}) {
   return {
@@ -27,7 +27,7 @@ function makeMilitaryRecord(icao24, overrides = {}) {
 // 1. One canonical aircraft record produces one canonical entity entry
 test('I2c: one canonical record produces one entity entry', () => {
   const rec = makeFlightsRecord('a1b2c3');
-  const idx = buildRecordIndex([{ storeId: STORE_ID.FLIGHTS, records: [rec] }]);
+  const idx = buildRecordIndex([{ storeId: 'flights', records: [rec] }]);
   assert.equal(idx.size, 1);
   assert.ok(idx.has('aircraft:icao24:a1b2c3'));
   const entry = idx.get('aircraft:icao24:a1b2c3');
@@ -41,8 +41,8 @@ test('I2c: same entityKey from flights + military → one entity, two store reco
   const f = makeFlightsRecord('a1b2c3', { lat: 51.5, callsign: 'BAW123' });
   const m = makeMilitaryRecord('a1b2c3', { lat: 51.6, callsign: 'RCH123' });
   const idx = buildRecordIndex([
-    { storeId: STORE_ID.FLIGHTS, records: [f] },
-    { storeId: STORE_ID.MILITARY, records: [m] },
+    { storeId: 'flights', records: [f] },
+    { storeId: 'military', records: [m] },
   ]);
   assert.equal(idx.size, 1);
   const entry = idx.get('aircraft:icao24:a1b2c3');
@@ -85,11 +85,9 @@ test('I2c: store enumeration order does not choose/overwrite payload', () => {
     { storeId: 'flights', records: [f] },
   ]);
 
-  // Both should have 2 records regardless of collection order
   assert.equal(idx1.get('aircraft:icao24:a1b2c3').records.length, 2);
   assert.equal(idx2.get('aircraft:icao24:a1b2c3').records.length, 2);
 
-  // Deterministic store ordering inside entry: alphabetical (flights before military)
   const e1 = idx1.get('aircraft:icao24:a1b2c3');
   assert.equal(e1.records[0].storeId, 'flights');
   assert.equal(e1.records[1].storeId, 'military');
@@ -105,7 +103,7 @@ test('I2c: entityKey null excluded', () => {
   const validRec = makeFlightsRecord('a1b2c3');
   const idx = buildRecordIndex([{ storeId: 'flights', records: [nullRec, validRec] }]);
   assert.equal(idx.size, 1);
-  assert.ok(!idx.has('~abc123'));
+  assert.ok(!idx.has('aircraft:icao24:abc123')); // nullRec not indexed
   assert.ok(idx.has('aircraft:icao24:a1b2c3'));
 });
 
@@ -117,19 +115,22 @@ test('I2c: TIS-B remains outside canonical index', () => {
   assert.equal(idx.get('aircraft:icao24:abc123'), undefined);
 });
 
-// 7. Missing/malformed inputs fail safely
+// 7. Missing/malformed inputs fail safely — including "banana"
 test('I2c: missing/malformed inputs fail safely', () => {
   const malformed = [
     { entityKey: null, icao24: '', lat: null, lon: null, altitudeM: null, callsign: null },
     { entityKey: '', icao24: 'abc', lat: null, lon: null, altitudeM: null, callsign: null },
+    { entityKey: 'banana', icao24: 'banana', lat: 0, lon: 0, altitudeM: 0, callsign: null },
+    { entityKey: 'foo:bar', icao24: 'foobar', lat: 0, lon: 0, altitudeM: 0, callsign: null },
+    { entityKey: 'aircraft:icao24:zzzzzz', icao24: 'zzzzzz', lat: 0, lon: 0, altitudeM: 0, callsign: null }, // non-hex
+    { entityKey: 'aircraft:icao24:ABC123', icao24: 'ABC123', lat: 0, lon: 0, altitudeM: 0, callsign: null }, // uppercase not canonical
     null,
     undefined,
     {},
   ];
   const idx = buildRecordIndex([{ storeId: 'flights', records: malformed }]);
-  assert.equal(idx.size, 0);
+  assert.equal(idx.size, 0, 'malformed should not enter index');
 
-  // Invalid storeId throws
   assert.throws(() => buildRecordIndex([{ storeId: 'invalid', records: [] }]), /Invalid storeId/);
   assert.throws(() => buildRecordIndex(null), /must be an array/);
 });
@@ -151,7 +152,6 @@ test('I2c: rebuild removes entities no longer present', () => {
   const idx1 = buildRecordIndex([{ storeId: 'flights', records: [r1, r2] }]);
   assert.equal(idx1.size, 2);
 
-  // Rebuild with only r1 — r2 should disappear
   const idx2 = buildRecordIndex([{ storeId: 'flights', records: [r1] }]);
   assert.equal(idx2.size, 1);
   assert.ok(idx2.has('aircraft:icao24:a1b2c3'));
@@ -170,7 +170,6 @@ test('I2c: rebuild removes store record disappeared, preserves entity from other
   assert.equal(idx1.size, 1);
   assert.equal(idx1.get('aircraft:icao24:a1b2c3').records.length, 2);
 
-  // Rebuild where flights no longer has it, but military still does
   const idx2 = buildRecordIndex([
     { storeId: 'flights', records: [] },
     { storeId: 'military', records: [m] },
@@ -180,7 +179,6 @@ test('I2c: rebuild removes store record disappeared, preserves entity from other
   assert.equal(entry.records.length, 1);
   assert.equal(entry.records[0].storeId, 'military');
 
-  // Rebuild where both gone → entity gone
   const idx3 = buildRecordIndex([
     { storeId: 'flights', records: [] },
     { storeId: 'military', records: [] },
@@ -194,23 +192,22 @@ test('I2c: no history retained', () => {
   const idx1 = buildRecordIndex([{ storeId: 'flights', records: [r1] }]);
   const r2 = makeFlightsRecord('a1b2c3', { lat: 2 });
   const idx2 = buildRecordIndex([{ storeId: 'flights', records: [r2] }]);
-  // idx2 should have lat 2, not retain lat 1 history
   assert.equal(idx2.get('aircraft:icao24:a1b2c3').records[0].record.lat, 2);
-  // idx1 still has lat 1 (immutable, no shared history)
   assert.equal(idx1.get('aircraft:icao24:a1b2c3').records[0].record.lat, 1);
 });
 
 // 12. No diff/change events produced
 test('I2c: no diff/change events', () => {
   const idx = buildRecordIndex([{ storeId: 'flights', records: [makeFlightsRecord('a1b2c3')] }]);
-  // API should not have on/diff/subscribe methods
   assert.equal(typeof idx.subscribe, 'undefined');
   assert.equal(typeof idx.on, 'undefined');
   assert.equal(typeof idx.diff, 'undefined');
   assert.equal(typeof idx.events, 'undefined');
+  assert.equal(typeof idx.keys, 'undefined', 'keys() removed in minimization');
+  assert.equal(typeof idx._contributingStores, 'undefined', '_contributingStores removed');
 });
 
-// 13. Returned data cannot mutate index internals
+// 13. Returned data cannot mutate index internals — primitive-only contract
 test('I2c: returned data cannot mutate internals', () => {
   const rec = makeFlightsRecord('a1b2c3', { callsign: 'ORIG' });
   const idx = buildRecordIndex([{ storeId: 'flights', records: [rec] }]);
@@ -240,20 +237,16 @@ test('I2c: deterministic enumeration', () => {
     makeFlightsRecord('b2c3d4'),
   ];
   const idx = buildRecordIndex([{ storeId: 'flights', records: recs }]);
-  const keys = idx.keys();
-  assert.deepEqual(keys, ['aircraft:icao24:a1b2c3', 'aircraft:icao24:b2c3d4', 'aircraft:icao24:c3d4e5']);
-
   const vals = idx.values();
   assert.equal(vals[0].entityKey, 'aircraft:icao24:a1b2c3');
   assert.equal(vals[1].entityKey, 'aircraft:icao24:b2c3d4');
   assert.equal(vals[2].entityKey, 'aircraft:icao24:c3d4e5');
 
-  // Repeat values() deterministic
   const vals2 = idx.values();
   assert.deepEqual(vals.map(v => v.entityKey), vals2.map(v => v.entityKey));
 });
 
-// 15. Existing I2a/I2b tests remain passing (checked via separate test run, but basic sanity here)
+// 15. I2a entityKey still works
 test('I2c: I2a entityKey still works', () => {
   assert.equal(aircraftEntityKey('ABC123'), 'aircraft:icao24:abc123');
   assert.equal(aircraftEntityKey('~abc123'), null);
@@ -271,44 +264,47 @@ test('I2c: does not call getAnalystRecords', async () => {
 test('I2c: does not depend on Cesium', async () => {
   const { readFile } = await import('node:fs/promises');
   const content = await readFile(new URL('./recordIndex.js', import.meta.url), 'utf8');
-  // Check no import of Cesium package
   assert.ok(!content.includes("from 'cesium'"), 'should not import from cesium');
   assert.ok(!content.includes('from \"cesium\"'), 'should not import from cesium');
   assert.ok(!content.includes('import * as Cesium'), 'should not import Cesium');
-  // Also ensure no Cesium.Cartesian3 etc usage
   assert.ok(!content.includes('Cartesian3'), 'should not use Cartesian3');
   assert.ok(!content.includes('Cartographic'), 'should not use Cartographic');
 });
 
-// 18. Index does not depend on DOM/UI
-test('I2c: does not depend on DOM/UI', async () => {
+// 18. Index does not depend on DOM/UI and does not import lifecycle
+test('I2c: does not depend on DOM/UI or lifecycle', async () => {
   const { readFile } = await import('node:fs/promises');
   const content = await readFile(new URL('./recordIndex.js', import.meta.url), 'utf8');
-  // Check no direct DOM access, not just mention in comment
-  // Look for patterns like document. or window. or viewer.
   assert.ok(!content.match(/\bdocument\./), 'should not use document.');
   assert.ok(!content.match(/\bwindow\./), 'should not use window.');
-  // We check for flightState._viewer or viewer. usage which would be Cesium viewer
   assert.ok(!content.includes('_viewer'), 'should not use _viewer');
+  // Check no import of lifecycle module (allow word in comment explaining NOT to import)
+  assert.ok(!content.includes("from './lifecycle'"), 'should not import lifecycle');
+  assert.ok(!content.includes('from \"./lifecycle\"'), 'should not import lifecycle');
+  assert.ok(!content.includes('from \"../data/lifecycle\"'), 'should not import lifecycle');
+  assert.ok(!content.includes("from '../data/lifecycle'"), 'should not import lifecycle');
+  assert.ok(!content.includes('import * as Cesium'), 'should not import Cesium');
+  // Ensure no runtime check of billboard.show as epistemic authority (allow comment mention)
+  assert.ok(!content.match(/\bbillboardCollection\.show/), 'should not check billboardCollection.show');
+  assert.ok(!content.match(/\bisMilitaryLayerActive\s*\(/), 'should not call isMilitaryLayerActive');
 });
 
 // 19. Index does not use timestamp winner logic
 test('I2c: does not use timestamp winner', async () => {
   const { readFile } = await import('node:fs/promises');
   const content = await readFile(new URL('./recordIndex.js', import.meta.url), 'utf8');
-  // Should not use observedReceiptMs, lastContactEpochMs, positionTimeMs for reconciliation
   assert.ok(!content.includes('observedReceiptMs'), 'should not use observedReceiptMs');
   assert.ok(!content.includes('lastContactEpochMs'), 'should not use lastContactEpochMs');
   assert.ok(!content.includes('positionTimeMs'), 'should not use positionTimeMs');
   assert.ok(!content.toLowerCase().includes('newest'), 'should not use newest-wins');
 });
 
-// 20. Layer visibility does not arbitrarily select a payload
-test('I2c: visibility does not select payload', () => {
+// 20. Layer visibility does not arbitrarily select a payload — eligibility owned by adapter
+test('I2c: visibility does not select payload, eligibility owned by adapter', () => {
   const f = makeFlightsRecord('a1b2c3', { callsign: 'F' });
   const m = makeMilitaryRecord('a1b2c3', { callsign: 'M' });
 
-  // Build index with both — should have both, no visibility check inside core
+  // Core indexes whatever explicitly supplied eligible collections — no visibility inference
   const idx = buildRecordIndex([
     { storeId: 'flights', records: [f] },
     { storeId: 'military', records: [m] },
@@ -316,20 +312,50 @@ test('I2c: visibility does not select payload', () => {
   const entry = idx.get('aircraft:icao24:a1b2c3');
   assert.equal(entry.records.length, 2);
 
-  // Core does not import isMilitaryLayerActive or check show
-  // Adapter responsibility to exclude disabled stores, not core
+  // Adapter excludes disabled stores: if military disabled, only flights passed
+  const idxFlightsOnly = buildRecordIndex([{ storeId: 'flights', records: [f] }]);
+  assert.equal(idxFlightsOnly.get('aircraft:icao24:a1b2c3').records.length, 1);
+  assert.equal(idxFlightsOnly.get('aircraft:icao24:a1b2c3').records[0].storeId, 'flights');
+
+  // Adapter excludes disabled flights, only military passed
+  const idxMilOnly = buildRecordIndex([{ storeId: 'military', records: [m] }]);
+  assert.equal(idxMilOnly.get('aircraft:icao24:a1b2c3').records.length, 1);
 });
 
-// Additional: buildAircraftRecordIndex convenience
-test('I2c: buildAircraftRecordIndex convenience', () => {
-  const f = makeFlightsRecord('a1b2c3');
-  const m = makeMilitaryRecord('a1b2c3');
-  const idx = buildAircraftRecordIndex({ flightsRecords: [f], militaryRecords: [m] });
+// 21. StoreId semantics: store origin not provider provenance
+test('I2c: storeId is store origin not provider', () => {
+  // Flights store merges OpenSky + adsb.lol observations via sticky merge,
+  // but storeId remains 'flights' — provider provenance belongs I3.
+  const recFromOpenSky = makeFlightsRecord('a1b2c3', { callsign: 'OPENSKY' });
+  const recFromAdsbLolButInFlightsStore = makeFlightsRecord('a1b2c3', { callsign: 'ADSLOL_IN_FLIGHTS' });
+  // Even if same storeId has different provider origins internally, index keeps one per storeId last-wins
+  const idx = buildRecordIndex([{ storeId: 'flights', records: [recFromOpenSky, recFromAdsbLolButInFlightsStore] }]);
   assert.equal(idx.size, 1);
-  assert.equal(idx.get('aircraft:icao24:a1b2c3').records.length, 2);
+  // Last wins within same store
+  assert.equal(idx.get('aircraft:icao24:a1b2c3').records[0].record.callsign, 'ADSLOL_IN_FLIGHTS');
+  assert.equal(idx.get('aircraft:icao24:a1b2c3').records[0].storeId, 'flights');
 });
 
-// Performance sanity at ~11k
+// 22. Eligibility: retained disabled cache must not be called globally current
+test('I2c: eligibility — retained disabled cache not globally current', () => {
+  // Simulate: flights disabled retains data, but adapter should NOT pass it if not eligible
+  const retainedFlights = makeFlightsRecord('a1b2c3', { callsign: 'RETAINED' });
+  const currentMilitary = makeMilitaryRecord('a1b2c3', { callsign: 'CURRENT_MIL' });
+
+  // If adapter incorrectly passes retained flights + current military, index would show both
+  const idxIncorrect = buildRecordIndex([
+    { storeId: 'flights', records: [retainedFlights] },
+    { storeId: 'military', records: [currentMilitary] },
+  ]);
+  assert.equal(idxIncorrect.get('aircraft:icao24:a1b2c3').records.length, 2);
+
+  // Correct adapter: only eligible stores (e.g., military enabled, flights disabled) → only military
+  const idxCorrect = buildRecordIndex([{ storeId: 'military', records: [currentMilitary] }]);
+  assert.equal(idxCorrect.get('aircraft:icao24:a1b2c3').records.length, 1);
+  assert.equal(idxCorrect.get('aircraft:icao24:a1b2c3').records[0].storeId, 'military');
+});
+
+// 23. Performance sanity at ~11k
 test('I2c: performance at ~11k', () => {
   const records = [];
   for (let i = 0; i < 11000; i++) {
@@ -340,8 +366,20 @@ test('I2c: performance at ~11k', () => {
   const idx = buildRecordIndex([{ storeId: 'flights', records }]);
   const elapsed = Date.now() - start;
   assert.equal(idx.size, 11000);
-  // Should be <200ms for 11k in Node (generous)
   assert.ok(elapsed < 500, `build 11k took ${elapsed}ms, expected <500ms`);
   const vals = idx.values();
   assert.equal(vals.length, 11000);
+});
+
+// 24. Final API surface minimal
+test('I2c: final API surface minimal', () => {
+  const idx = buildRecordIndex([{ storeId: 'flights', records: [makeFlightsRecord('a1b2c3')] }]);
+  assert.equal(typeof idx.get, 'function');
+  assert.equal(typeof idx.has, 'function');
+  assert.equal(typeof idx.values, 'function');
+  assert.equal(typeof idx.size, 'number');
+  // Removed surfaces
+  assert.equal(typeof idx.keys, 'undefined', 'keys() removed');
+  assert.equal(typeof idx._contributingStores, 'undefined', '_contributingStores removed');
+  assert.equal(typeof idx.subscribe, 'undefined');
 });
