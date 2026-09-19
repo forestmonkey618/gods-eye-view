@@ -30,8 +30,11 @@ export function vesselSnapshot(
   payload,
   {
     source = 'AISStream',
+    sourceId = 'aisstream',
     coverage = 'received AIS positions',
     referenceFor = (row) => String(row.mmsi || row.input_identifier || ''),
+    now = Date.now(),
+    receivedAtMs = null,
   } = {},
 ) {
   if (!Array.isArray(payload?.rows))
@@ -54,13 +57,17 @@ export function vesselSnapshot(
       (newest, row) => Math.max(newest || 0, row.observedAtMs || 0) || null,
       null,
     );
+  const resolvedReceivedAtMs =
+    Number.isFinite(receivedAtMs) && receivedAtMs > 0 ? receivedAtMs : now;
   return {
     records,
     source,
+    sourceId,
     coverage,
     complete: records.length === rows.length && !payload?.refreshing,
     rejectedCount: rows.length - records.length,
     observedAtMs,
+    receivedAtMs: resolvedReceivedAtMs,
     freshness: payload?.refreshing
       ? 'stale'
       : observedAtMs == null
