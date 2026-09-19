@@ -51,6 +51,7 @@ export function createEvidence({
       flightState._billboardCollection.remove(bb);
     flightState._billboards.clear();
     flightState.records.data.clear();
+    flightState.records.provenance.clear(); // I3c: synthetic evidence carries no provenance
     flightState._positionHistory.clear();
     flightState._displayCourse.clear();
     flightState.records.missingPolls.clear();

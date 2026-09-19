@@ -1,11 +1,40 @@
 import { pickRenderAltitudeM } from '../../data/renderAltitude.js';
 import { stickyText, stickyNumber } from '../../data/aircraftMeta.js';
 import { classifyAircraft } from '../../data/aircraftClass.js';
+import { EPISTEMIC, createProvenance } from '../../data/provenance.js';
 import {
   GROUND_FLOOR_WARM_MAX_ALT_M,
   LANDED_MISSING_POLL_LIMIT,
   MISSING_POLL_LIMIT,
 } from './recordPolicy.js';
+
+/** I3c: a REPORTED descriptor, or null when the batch carried no source
+ * identity / receipt (legacy callers) — absence is truthful, a guess is not. */
+function reportedProvenance(sourceId, reportedAtMs, receivedAtMs) {
+  if (!sourceId || !Number.isFinite(receivedAtMs) || receivedAtMs <= 0)
+    return null;
+  try {
+    return createProvenance({
+      epistemic: EPISTEMIC.REPORTED,
+      sourceId,
+      reportedAtMs:
+        Number.isFinite(reportedAtMs) && reportedAtMs > 0 ? reportedAtMs : null,
+      receivedAtMs,
+    });
+  } catch {
+    return null;
+  }
+}
+
+/** I3c: a DERIVED descriptor for a locally computed field (never carries the
+ * feed's sourceId — the feed did not assert the value). */
+function derivedProvenance(via) {
+  try {
+    return createProvenance({ epistemic: EPISTEMIC.DERIVED, via });
+  } catch {
+    return null;
+  }
+}
 
 /** Portable military aircraft metadata and bounded missing-poll retention. */
 export class MilitaryFlightRecords {
@@ -15,10 +44,23 @@ export class MilitaryFlightRecords {
     this.missingPolls = new Map();
     this.geoidNCache = new Map();
     this.geoidReady = false;
+    // I3c: per-field provenance sidecar — Map<native record key, {field: descriptor}>.
+    // STORE-LOCAL (keyed like `data`, including TIS-B `~...` ids — no canonical
+    // identity is invented). CURRENT only: each field's descriptor follows the
+    // value currently held in `data`; sticky retention keeps the descriptor of
+    // the retained value; a synthetic fallback carries no descriptor at all.
+    // Frozen descriptors, copy-safe. No history.
+    this.provenance = new Map();
   }
   receive(
     aircraft,
-    { observedAtMs, floorWarmPoints: _floorWarmPoints, modelOwnsVisual },
+    {
+      observedAtMs,
+      floorWarmPoints: _floorWarmPoints,
+      modelOwnsVisual,
+      sourceId = null,
+      receivedAtMs = null,
+    },
   ) {
     const { geoidHeight, cachedGroundFloor, floorAltitudeM } = this.services;
     const { id: icao24, longitude: lon, latitude: lat } = aircraft;
@@ -170,6 +212,10 @@ export class MilitaryFlightRecords {
       rawLon: lon,
     };
     this.data.set(icao24, meta);
+    this._recordProvenance(icao24, aircraft, prevMeta, {
+      sourceId,
+      receivedAtMs,
+    });
 
     return {
       prevMeta,
@@ -177,6 +223,143 @@ export class MilitaryFlightRecords {
       groundFlipped,
       fixEpochMs: aircraft.positionTimeMs ?? observedAtMs,
     };
+  }
+
+  /**
+   * I3c — provenance follows the CURRENT value just written to `data`.
+   *
+   * Timestamps (readsb/adsb.lol semantics, NOT OpenSky's): the payload carries
+   * only two ages per aircraft — `seen_pos` (position last updated) and `seen`
+   * (any message last received) — which the normalizer turns into
+   * `positionTimeMs` / `contactTimeMs`. There are NO per-field report times, so:
+   *  - position, altitudeFt, geoAltitudeM, onGround → positionTimeMs
+   *    (the position-message group; same convention as the civil store);
+   *  - speedMps, track, verticalRateMps, callsign, lastContactEpochMs →
+   *    contactTimeMs, null when the row carried no `seen`;
+   *  - type / registration / operator (readsb `t` / `r` / `ownOp`) are
+   *    database lookups delivered BY adsb.lol, not transponder reports: still
+   *    REPORTED by 'adsb.lol', but reportedAtMs is null — a database attribute
+   *    has no event time and `seen` would be false precision.
+   * Value semantics honoured exactly as the store writes them: `speedMps` and
+   * `track` are coerced to a synthetic 0 BEFORE the sticky merge when the row
+   * lacks gs/track, so a missing kinematic gets NO descriptor (the stored 0 is
+   * not a report and not a retained report). Locally computed fields (klass,
+   * wasAirborne, renderAltitudeM) are DERIVED and never inherit the feed id.
+   * Internal bookkeeping (sourceReference, observedReceiptMs, turnRateDps,
+   * rawLat/rawLon beyond `position`) is deliberately untagged.
+   */
+  _recordProvenance(icao24, aircraft, prevMeta, { sourceId, receivedAtMs }) {
+    const prevProv = this.provenance.get(icao24) || {};
+    const next = { ...prevProv };
+    const positionReportedAtMs =
+      Number.isFinite(aircraft.positionTimeMs) && aircraft.positionTimeMs > 0
+        ? aircraft.positionTimeMs
+        : null;
+    const contactReportedAtMs =
+      Number.isFinite(aircraft.contactTimeMs) && aircraft.contactTimeMs > 0
+        ? aircraft.contactTimeMs
+        : null;
+    const reported = (reportedAtMs) =>
+      reportedProvenance(sourceId, reportedAtMs, receivedAtMs);
+
+    /** Replacement: the row asserted the value this poll. */
+    const replace = (field, reportedAtMs) => {
+      const prov = reported(reportedAtMs);
+      if (prov) next[field] = prov;
+      else delete next[field];
+    };
+    /** Sticky number: replacement when reported, retention when the store
+     * kept the previous finite value, otherwise (null) no descriptor. */
+    const stickyNumberProv = (field, reportedNow, prevValue, reportedAtMs) => {
+      if (reportedNow) replace(field, reportedAtMs);
+      else if (!Number.isFinite(prevValue)) delete next[field];
+      // else: retention — the previous descriptor already follows the value
+    };
+    /** Sticky text: same shape for callsign / type / registration / operator. */
+    const stickyTextProv = (field, reportedNow, prevValue, reportedAtMs) => {
+      if (reportedNow) replace(field, reportedAtMs);
+      else if (!String(prevValue || '').trim()) delete next[field];
+    };
+
+    // Position — admitted rows always carry a finite lat/lon (replacement).
+    if (
+      Number.isFinite(aircraft.latitude) &&
+      Number.isFinite(aircraft.longitude)
+    )
+      replace('position', positionReportedAtMs);
+    else delete next.position;
+
+    // Position-message group.
+    stickyNumberProv(
+      'altitudeFt',
+      Number.isFinite(aircraft.baroAltitudeM),
+      prevMeta?.altitudeFt,
+      positionReportedAtMs,
+    );
+    if (Number.isFinite(aircraft.ellipsoidAltitudeM))
+      replace('geoAltitudeM', positionReportedAtMs);
+    else delete next.geoAltitudeM; // non-sticky: null when the row lacks alt_geom
+    replace('onGround', positionReportedAtMs); // boolean, always replaced
+
+    // Kinematics / identification — general-message time.
+    // speedMps / track: the store writes a synthetic 0 when the row lacks the
+    // value (coercion precedes the sticky merge), so only a finite raw
+    // observation earns a descriptor; the synthetic 0 carries none.
+    if (Number.isFinite(aircraft.speedMps))
+      replace('speedMps', contactReportedAtMs);
+    else delete next.speedMps;
+    if (Number.isFinite(aircraft.courseDeg))
+      replace('track', contactReportedAtMs);
+    else delete next.track;
+    stickyNumberProv(
+      'verticalRateMps',
+      Number.isFinite(aircraft.verticalRateMps),
+      prevMeta?.verticalRateMps,
+      contactReportedAtMs,
+    );
+    stickyNumberProv(
+      'lastContactEpochMs',
+      Number.isFinite(aircraft.contactTimeMs),
+      prevMeta?.lastContactEpochMs,
+      contactReportedAtMs,
+    );
+    stickyTextProv(
+      'callsign',
+      !!String(aircraft.callsign || '').trim(),
+      prevMeta?.callsign,
+      contactReportedAtMs,
+    );
+
+    // Database-backed identity delivered by the feed: no event time (null).
+    stickyTextProv(
+      'type',
+      !!String(aircraft.typeCode || '').trim(),
+      prevMeta?.type,
+      null,
+    );
+    stickyTextProv(
+      'registration',
+      !!String(aircraft.registration || '').trim(),
+      prevMeta?.registration,
+      null,
+    );
+    stickyTextProv(
+      'operator',
+      !!String(aircraft.operator || '').trim(),
+      prevMeta?.operator,
+      null,
+    );
+
+    // Locally computed — DERIVED, same `via` vocabulary as the civil store.
+    const klass = derivedProvenance('classification');
+    if (klass) next.klass = klass;
+    const airborne = derivedProvenance('airborne-history');
+    if (airborne) next.wasAirborne = airborne;
+    const render = derivedProvenance('render-altitude-selection');
+    if (render) next.renderAltitudeM = render;
+
+    if (Object.keys(next).length === 0) this.provenance.delete(icao24);
+    else this.provenance.set(icao24, next);
   }
   absence(id, { complete, likelyLanded }) {
     if (
@@ -197,5 +380,6 @@ export class MilitaryFlightRecords {
     this.data.delete(id);
     this.missingPolls.delete(id);
     this.geoidNCache.delete(id);
+    this.provenance.delete(id);
   }
 }

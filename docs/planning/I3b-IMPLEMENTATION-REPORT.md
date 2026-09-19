@@ -129,7 +129,7 @@ IMPLEMENTED klass, wasAirborne, renderAltitudeM via classification/airborne-hist
 
 ## 12. Military-store decision
 
-DEFERRED — owner approved.
+DEFERRED — owner approved. (Implemented in I3c — see `I3c-IMPLEMENTATION-REPORT.md`.)
 
 ## 13. Final provenance.js API
 
@@ -227,6 +227,8 @@ Cartesian3.distance still in getNearby, no slantDistanceM, geo.js untouched.
 ## 28. Remaining aircraft provenance gaps
 
 turnRateDps (history), military, vessel/satellite, MODELED groundFloor/geoidN, INTERPRETED, unit-conversion via note.
+
+*I3c update (2026-09-19):* military implemented; turnRateDps resolved as NO PROVENANCE (internal motion-model input, windowed change measurement → I9 if ever analyst-visible); unit-conversion via not needed. I3c also found and fixed an I3b lifecycle omission: civil `init()`/`destroy()`/focus-evidence reset and the Military-layer activation sweep cleared `records.data` without clearing `records.provenance`.
 
 ## 29. ONE recommended next I3 slice
 

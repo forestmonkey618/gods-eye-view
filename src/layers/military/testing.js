@@ -49,6 +49,7 @@ export function createTesting({
     flightState.records.missingPolls = new Map();
     flightState._displayCourse.clear();
     flightState.records.geoidNCache.clear();
+    flightState.records.provenance.clear(); // I3c: seeded meta carries no descriptors
     flightState._trackedIcao = tracked ? icao24 : null;
     flightState._trackedEntity = tracked ? entity : null;
     flightState._trackedModel = null;

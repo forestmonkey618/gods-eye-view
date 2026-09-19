@@ -722,6 +722,57 @@ export function createQueries({
     },
 
     /**
+     * I3c — current military field provenance sidecar, CURRENT only, per field.
+     * Single authority: MilitaryFlightRecords.provenance
+     * Map<native record key, {field: descriptor}>.
+     *
+     * STORE-LOCAL accessor (same contract as the civil layer's
+     * getProvenanceMap()): keyed by the store's own key (lowercased hex, TIS-B
+     * `~...` ids included, entityKey NOT used — no canonical identity is
+     * invented and no cross-store merge is attempted). The civil and military
+     * stores may hold the same ICAO at the same time; each answers only for
+     * the values IT currently holds.
+     *
+     * Shape per aircraft (sparse — only fields whose current value has a
+     * truthful origin carry a descriptor; a synthetic fallback carries none):
+     *   position, altitudeFt, geoAltitudeM, onGround
+     *     → REPORTED sourceId 'adsb.lol', reportedAtMs = positionTimeMs
+     *       (readsb `seen_pos`-derived), receivedAtMs = batch receipt
+     *   speedMps, track, verticalRateMps, callsign, lastContactEpochMs
+     *     → REPORTED 'adsb.lol', reportedAtMs = contactTimeMs (readsb `seen`),
+     *       null when the row carried no `seen`
+     *   type, registration, operator
+     *     → REPORTED 'adsb.lol' (database lookups delivered by the feed),
+     *       reportedAtMs null — no event time exists for a database attribute
+     *   klass → DERIVED via 'classification'
+     *   wasAirborne → DERIVED via 'airborne-history'
+     *   renderAltitudeM → DERIVED via 'render-altitude-selection'
+     * Never tagged: sourceReference, observedReceiptMs, turnRateDps (motion
+     * model input, not an analyst value), geoid/floor caches.
+     *
+     * Copy-safe: fresh Map, fresh object per aircraft, fresh copy per
+     * descriptor. No history. getCurrentEntities()/getAnalystRecords() and the
+     * recordIndex are unchanged and provenance-unaware.
+     *
+     * @returns {Map<string, Object>} Map<native record key, {field: descriptor}>
+     */
+    getProvenanceMap() {
+      const fullMap = flightState.records?.provenance;
+      if (!fullMap || fullMap.size === 0) return new Map();
+      const out = new Map();
+      for (const [id, provObj] of fullMap) {
+        if (!provObj || typeof provObj !== 'object') continue;
+        const copy = {};
+        for (const [field, desc] of Object.entries(provObj)) {
+          if (!desc) continue;
+          copy[field] = { ...desc };
+        }
+        if (Object.keys(copy).length > 0) out.set(id, copy);
+      }
+      return out;
+    },
+
+    /**
      * Start camera-tracking an aircraft by ICAO hex identifier.
      * @param {string} icao24 - ICAO hex identifier of the aircraft.
      * @returns {boolean} True if the aircraft exists and tracking started.

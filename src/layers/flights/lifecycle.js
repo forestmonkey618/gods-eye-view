@@ -82,6 +82,7 @@ export function createLifecycle({
       flightState._cullPositions.clear();
       flightState._detectionObjects = new Map();
       flightState.records.data = new Map();
+      flightState.records.provenance.clear(); // I3c: no descriptor outlives its record
       flightState._positionHistory = new Map();
       flightState._displayCourse.clear();
       flightState._groundSnap.clear();
@@ -306,6 +307,7 @@ export function createLifecycle({
       flightState._cullPositions.clear();
       flightState._detectionObjects.clear();
       flightState.records.data.clear();
+      flightState.records.provenance.clear(); // I3c: no descriptor outlives its record
       flightState._positionHistory.clear();
       flightState._displayCourse.clear();
       flightState._groundSnap.clear();
