@@ -812,53 +812,99 @@ export function createQueries({
     },
 
     /**
-     * I3a — Current aircraft position provenance sidecar — CURRENT only.
-     * STORE-LOCAL accessor (not canonical): returns current position provenance for THIS flights store,
-     * keyed by native icao24 (lowercased hex, preserves ~ for TIS-B), NOT entityKey.
+     * I3b — Current aircraft field provenance sidecar — CURRENT only, per-field.
+     * Evolved from I3a position-only: I3a returned Map<icao24, descriptor> for position.
+     * I3b returns Map<icao24, {field: descriptor}> where each field's provenance follows
+     * its CURRENT value (sticky retention retains old provenance, replacement replaces provenance).
+     *
+     * STORE-LOCAL accessor (not canonical): keyed by native icao24 (lowercased hex, preserves ~ for TIS-B), NOT entityKey.
      * This is deliberate: FlightRecords.data Map is keyed by native icao24 (the actual storage key,
-     * same as _billboards key, trackById resolution, Context cohorts). Provenance follows rawLat/rawLon
-     * which is stored under native id. Using native key allows direct join with store's own data
+     * same as _billboards key, trackById resolution, Context cohorts). Provenance follows current values
+     * which are stored under native id. Using native key allows direct join with store's own data
      * without reconstruction and includes TIS-B / noncanonical (entityKey:null) which still have
      * positions that need provenance. Creating synthetic entityKeys for TIS-B would invent identity.
      *
-     * - Returns Map<icao24, provenance descriptor> where descriptor is
-     *   {epistemic:'reported', sourceId, reportedAtMs, receivedAtMs}
-     * - Position = rawLat/rawLon/fix. Follows retained position: if position
-     *   retained due to absence, provenance remains old; if replaced, new.
-     * - TIS-B / noncanonical (entityKey:null) included, keyed by native id
-     *   (e.g., '~abc123'), no synthetic keys, no invented canonical identity.
+     * Shape per aircraft (sparse — only fields with current value have provenance):
+     * {
+     *   position: {epistemic:'reported', sourceId, reportedAtMs, receivedAtMs, via:null} // rawLat/rawLon
+     *   altitude: REPORTED // baro
+     *   geoAltitudeM: REPORTED
+     *   velocity: REPORTED
+     *   true_track: REPORTED
+     *   verticalRate: REPORTED
+     *   callsign: REPORTED
+     *   originCountry: REPORTED
+     *   category: REPORTED
+     *   onGround: REPORTED
+     *   lastContactEpochMs: REPORTED
+     *   // enrichment deferred to I3c: typeCode, registration, airline, route, typeName
+     *   klass: {epistemic:'derived', via:'classification', ...}
+     *   wasAirborne: {epistemic:'derived', via:'airborne-history'}
+     *   renderAltitudeM: {epistemic:'derived', via:'render-altitude-selection'}
+     * }
+     *
+     * - Position = rawLat/rawLon/fix. Follows retained position.
+     * - Altitude (baro) = stickyNumber with fallback 0/10000 synthetic -> no provenance when fallback.
+     * - geoAltitudeM = non-sticky, null when missing -> no provenance when null.
+     * - velocity/true_track stickyNumber fallback 0 synthetic -> no provenance when fallback, provenance present when reported 0 (distinguishable).
+     * - verticalRate/category/lastContact stickyNumber fallback null -> no provenance when null.
+     * - callsign/originCountry stickyText -> no provenance when empty/null.
+     * - onGround boolean always replacement -> always provenance when source info available.
+     * - Derived fields always present with DERIVED via, no sourceId required.
+     * - TIS-B / noncanonical (entityKey:null) included, keyed by native id (e.g., '~abc123'), no synthetic keys.
      * - CURRENT only: no history, no previous provenance arrays.
-     * - Copy-safe: fresh Map per call, fresh plain object per descriptor (frozen internally).
+     * - Copy-safe: fresh Map per call, fresh plain object per aircraft, fresh copy per descriptor (frozen internally).
      * - getCurrentEntities() remains unchanged and provenance-unaware (I2 primitive-only).
      *
+     * Breaking change from I3a: I3a returned Map<icao24, descriptor> (position directly). I3b returns
+     * Map<icao24, {position: descriptor, ...}>. This is explicit evolution, documented, tests updated.
+     * No broad consumers existed in I3a, only tests.
+     *
      * Future canonical consumer join path:
-     * - Canonical consumer holding entityKey = aircraft:icao24:abc123 can derive native id via
-     *   suffix = entityKey.slice('aircraft:icao24:'.length) (lowercased 6-hex) which matches Map key.
-     * - Or more robustly: call getCurrentEntities() which returns both {entityKey, icao24, ...} and
-     *   use icao24 to lookup this Map. This avoids parsing entityKey manually and works for
-     *   current-store eligibility filtering (adapter knows which store produced array).
-     * - Future canonical provenance projection (I3c+) will be an adapter-level projection that:
-     *   1. Takes store-local provenance Map keyed by native id
-     *   2. Filters to canonical only (entityKey != null) via aircraftEntityKey(icao24)
-     *   3. Re-keys by canonical entityKey for canonical consumers, omitting TIS-B from canonical sidecar.
-     *   This keeps store-local complete (includes TIS-B) and canonical projection deliberate, no second identity system.
+     * - Call getCurrentEntities() which returns both {entityKey, icao24, ...} and use icao24 to lookup this Map.
+     * - Or derive native id via suffix = entityKey.slice('aircraft:icao24:'.length) for canonical.
+     * - Future canonical provenance projection (I3c+) will be adapter-level that filters canonical only
+     *   and re-keys by entityKey, omitting TIS-B.
      *
-     * Does native-keyed public provenance cause I6/analyst dependency on layer-native identity?
-     * - Analyst records already contain both icao24 and entityKey (I2b). So I6 can join via icao24
-     *   without depending solely on native identity. If analyst only has entityKey, it can derive
-     *   native id as above. Dependency exists but is unavoidable because FlightRecords storage is
-     *   native-keyed; canonical projection will hide it later.
-     *
-     * @returns {Map<string, {epistemic:string, sourceId:string|null, reportedAtMs:number|null, receivedAtMs:number|null}>}
+     * @returns {Map<string, Object>} Map<icao24, {field: provenance descriptor}>
      */
     getProvenanceMap() {
-      const provMap = flightState.records.positionProvenance;
-      if (!provMap || provMap.size === 0) return new Map();
+      // I3b: full per-field provenance sidecar, plus backward-compat positionProvenance fallback
+      const fullMap = flightState.records.provenance;
+      const posMap = flightState.records.positionProvenance;
+      if ((!fullMap || fullMap.size === 0) && (!posMap || posMap.size === 0)) return new Map();
       const out = new Map();
-      for (const [icao24, prov] of provMap) {
-        if (!prov) continue;
-        // Copy-safe: shallow copy, provenance descriptors are frozen but we return fresh object
-        out.set(icao24, { ...prov });
+      // Prefer full map
+      if (fullMap && fullMap.size > 0) {
+        for (const [icao24, provObj] of fullMap) {
+          if (!provObj || typeof provObj !== 'object') continue;
+          const copy = {};
+          for (const [field, desc] of Object.entries(provObj)) {
+            if (!desc) continue;
+            copy[field] = { ...desc };
+          }
+          if (Object.keys(copy).length > 0) out.set(icao24, copy);
+        }
+        // Merge any position-only entries that might not be in full map (legacy)
+        if (posMap && posMap.size > 0) {
+          for (const [icao24, posProv] of posMap) {
+            if (!posProv) continue;
+            const existing = out.get(icao24);
+            if (existing) {
+              if (!existing.position) existing.position = { ...posProv };
+            } else {
+              out.set(icao24, { position: { ...posProv } });
+            }
+          }
+        }
+        return out;
+      }
+      // Fallback to old position-only map (I3a legacy) — wrap into new shape {position: descriptor}
+      if (posMap && posMap.size > 0) {
+        for (const [icao24, prov] of posMap) {
+          if (!prov) continue;
+          out.set(icao24, { position: { ...prov } });
+        }
       }
       return out;
     },

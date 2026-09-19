@@ -72,28 +72,47 @@ function validateReceivedAtMs(value, { required = false } = {}) {
   return value;
 }
 
+function validateVia(via, { required = false } = {}) {
+  if (via == null) {
+    if (required) throw new TypeError('via is required for DERIVED');
+    return null;
+  }
+  if (typeof via !== 'string') throw new TypeError('via must be string');
+  const trimmed = via.trim();
+  if (!trimmed) throw new TypeError('via cannot be empty');
+  if (trimmed.length > 64) throw new TypeError('via too long');
+  if (/\s/.test(trimmed)) throw new TypeError('via must not contain whitespace');
+  if (!/^[a-z0-9._:-]+$/.test(trimmed)) {
+    throw new TypeError(`via has invalid characters: ${trimmed}`);
+  }
+  return trimmed;
+}
+
 /**
  * Create a current-state provenance descriptor.
  *
- * For I3a first slice only REPORTED position is used, but primitive supports
- * DERIVED/MODELED/INTERPRETED for future extension without speculative fields.
+ * I3a: REPORTED position only.
+ * I3b: adds via for DERIVED (e.g. classification, render-altitude-selection).
  *
  * @param {Object} params
  * @param {string} params.epistemic - one of EPISTEMIC values, required
  * @param {string} [params.sourceId] - stable machine id, required for REPORTED
  * @param {number|null} [params.reportedAtMs] - external event/fix time, optional/null when unavailable
- * @param {number} [params.receivedAtMs] - client receipt time, required for REPORTED in this slice
- * @returns {Object} frozen descriptor {epistemic, sourceId, reportedAtMs, receivedAtMs}
+ * @param {number} [params.receivedAtMs] - client receipt time, required for REPORTED, optional for DERIVED
+ * @param {string} [params.via] - stable operation id for DERIVED (e.g. 'classification'), optional for REPORTED
+ * @returns {Object} frozen descriptor {epistemic, sourceId, reportedAtMs, receivedAtMs, via}
  */
-export function createProvenance({ epistemic, sourceId, reportedAtMs, receivedAtMs } = {}) {
+export function createProvenance({ epistemic, sourceId, reportedAtMs, receivedAtMs, via } = {}) {
   if (!epistemic || typeof epistemic !== 'string') throw new TypeError('epistemic is required');
   if (!EPISTEMIC_VALUES.has(epistemic)) throw new TypeError(`unsupported epistemic: ${epistemic}`);
 
   const isReported = epistemic === EPISTEMIC.REPORTED;
+  const isDerived = epistemic === EPISTEMIC.DERIVED;
 
   const validSourceId = validateSourceId(sourceId, { required: isReported });
   const validReportedAtMs = validateReportedAtMs(reportedAtMs);
   const validReceivedAtMs = validateReceivedAtMs(receivedAtMs, { required: isReported });
+  const validVia = validateVia(via, { required: isDerived });
 
   // No implicit age/fresh/stale/confidence/history/observationId
   const descriptor = {
@@ -101,6 +120,7 @@ export function createProvenance({ epistemic, sourceId, reportedAtMs, receivedAt
     sourceId: validSourceId,
     reportedAtMs: validReportedAtMs,
     receivedAtMs: validReceivedAtMs,
+    via: validVia,
   };
 
   return Object.freeze(descriptor);
@@ -112,12 +132,13 @@ export function createProvenance({ epistemic, sourceId, reportedAtMs, receivedAt
  */
 export function isValidProvenance(value) {
   if (!value || typeof value !== 'object') return false;
-  const { epistemic, sourceId, reportedAtMs, receivedAtMs } = value;
+  const { epistemic, sourceId, reportedAtMs, receivedAtMs, via } = value;
   if (!EPISTEMIC_VALUES.has(epistemic)) return false;
   try {
     validateSourceId(sourceId, { required: epistemic === EPISTEMIC.REPORTED });
     validateReportedAtMs(reportedAtMs);
     validateReceivedAtMs(receivedAtMs, { required: epistemic === EPISTEMIC.REPORTED });
+    validateVia(via, { required: epistemic === EPISTEMIC.DERIVED });
   } catch {
     return false;
   }

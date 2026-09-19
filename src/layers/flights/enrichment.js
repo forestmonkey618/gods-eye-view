@@ -9,6 +9,7 @@ import {
   ENRICH_AMBIENT_REFILL_WINDOW_MS,
   ENRICH_AMBIENT_PER_SWEEP,
 } from './policy.js';
+import { EPISTEMIC, createProvenance } from '../../data/provenance.js';
 
 export function createEnrichment({
   flightState,
@@ -83,6 +84,57 @@ export function createEnrichment({
       (data) => {
         const meta = flightState.records.data.get(icao24);
         if (!meta) return; // evicted while the lookup was in flight
+        const receivedAtMs = Date.now();
+        let changed = false;
+        function tryEnrichProv() {
+          try {
+            return createProvenance({
+              epistemic: EPISTEMIC.REPORTED,
+              sourceId: 'adsbdb',
+              reportedAtMs: null,
+              receivedAtMs,
+            });
+          } catch {
+            return null;
+          }
+        }
+        // Ensure provenance map entry exists
+        let provMap = flightState.records.provenance;
+        if (!provMap) {
+          provMap = flightState.records.provenance = new Map();
+        }
+        let provObj = provMap.get(icao24);
+        if (!provObj) {
+          provObj = {};
+          provMap.set(icao24, provObj);
+        }
+        if (data.typeCode && data.typeCode !== meta.typeCode) {
+          meta.typeCode = data.typeCode;
+          changed = true;
+          const p = tryEnrichProv();
+          if (p) provObj.typeCode = p;
+        } else if (data.typeCode && !provObj.typeCode) {
+          // first time enrichment, even if value same as existing (unlikely), ensure provenance
+          const p = tryEnrichProv();
+          if (p) provObj.typeCode = p;
+        }
+        if (data.typeName && data.typeName !== meta.typeName) {
+          meta.typeName = data.typeName;
+          const p = tryEnrichProv();
+          if (p) provObj.typeName = p;
+        } else if (data.typeName && !provObj.typeName) {
+          const p = tryEnrichProv();
+          if (p) provObj.typeName = p;
+        }
+        if (data.registration && data.registration !== meta.registration) {
+          meta.registration = data.registration;
+          const p = tryEnrichProv();
+          if (p) provObj.registration = p;
+        } else if (data.registration && !provObj.registration) {
+          const p = tryEnrichProv();
+          if (p) provObj.registration = p;
+        }
+        // Preserve previous behavior: || retains if new falsy
         meta.typeCode = data.typeCode || meta.typeCode;
         meta.typeName = data.typeName || meta.typeName;
         meta.registration = data.registration || meta.registration;
@@ -93,12 +145,29 @@ export function createEnrichment({
           });
           if (klass !== meta.klass) {
             meta.klass = klass;
+            changed = true;
+            // klass is DERIVED, ensure its provenance exists (via classification)
+            try {
+              const derivedProv = createProvenance({
+                epistemic: EPISTEMIC.DERIVED,
+                via: 'classification',
+              });
+              provObj.klass = derivedProv;
+            } catch {}
             const bb = flightState._billboards.get(icao24);
             if (bb)
               parts.rendering._applyFleetBillboardPresentation(icao24, bb);
             // Hangar fleet: the class's GLB/scale may have changed — resync the
             // live model, any in-flight load, and the tracked standalone model.
             parts.rendering._syncModelToClass(icao24);
+          } else if (!provObj.klass) {
+            // Ensure klass provenance exists even if klass unchanged but first enrichment
+            try {
+              provObj.klass = createProvenance({
+                epistemic: EPISTEMIC.DERIVED,
+                via: 'classification',
+              });
+            } catch {}
           }
         }
         if (icao24 === flightState._trackedIcao && flightState._trackedEntity)
@@ -119,6 +188,54 @@ export function createEnrichment({
       (data) => {
         const meta = flightState.records.data.get(icao24);
         if (!meta) return;
+        const receivedAtMs = Date.now();
+        function tryEnrichProv() {
+          try {
+            return createProvenance({
+              epistemic: EPISTEMIC.REPORTED,
+              sourceId: 'adsbdb',
+              reportedAtMs: null,
+              receivedAtMs,
+            });
+          } catch {
+            return null;
+          }
+        }
+        let provMap = flightState.records.provenance;
+        if (!provMap) {
+          provMap = flightState.records.provenance = new Map();
+        }
+        let provObj = provMap.get(icao24);
+        if (!provObj) {
+          provObj = {};
+          provMap.set(icao24, provObj);
+        }
+        if (data.airline && data.airline !== meta.airline) {
+          meta.airline = data.airline;
+          const p = tryEnrichProv();
+          if (p) provObj.airline = p;
+        } else if (data.airline && !provObj.airline) {
+          const p = tryEnrichProv();
+          if (p) provObj.airline = p;
+        }
+        if (data.origin && data.destination) {
+          const newRoute = { origin: data.origin, destination: data.destination };
+          // Simple change detection: if route missing or codes differ
+          const prev = meta.route;
+          const changed =
+            !prev ||
+            prev.origin?.code !== newRoute.origin?.code ||
+            prev.destination?.code !== newRoute.destination?.code;
+          if (changed) {
+            meta.route = newRoute;
+            const p = tryEnrichProv();
+            if (p) provObj.route = p;
+          } else if (!provObj.route) {
+            const p = tryEnrichProv();
+            if (p) provObj.route = p;
+          }
+        }
+        // Preserve previous || behavior
         meta.airline = data.airline || meta.airline;
         if (data.origin && data.destination)
           meta.route = { origin: data.origin, destination: data.destination };

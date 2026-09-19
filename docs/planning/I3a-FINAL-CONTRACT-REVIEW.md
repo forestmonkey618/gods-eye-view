@@ -328,3 +328,22 @@ Result: **127 tests pass, 0 fail** (35 provenance + 92 I2+records). Breakdown: 3
 ---
 
 **End of FINAL I3a CONTRACT REVIEW — store-local Map<icao24, provenance> including TIS-B, future canonical projection via adapter, missing X-Flight-Source proves OpenSky per route invariant, unexpected header truthful, no I2 identity change in I3a, receipt single per batch, 127 tests pass, I2 closed, D9/I4/I5/I6/I9 untouched.**
+
+---
+
+## I3b EVOLUTION NOTE (2026-09-18)
+
+I3b extends I3a position-only provenance to full aircraft current-field / sticky provenance.
+
+- getProvenanceMap() shape evolved from I3a Map<icao24, descriptor> (position directly) to I3b Map<icao24, {field: descriptor}> per-field sparse sidecar including position, altitude, geoAltitudeM, velocity, true_track, verticalRate, callsign, originCountry, category, onGround, lastContactEpochMs, plus enrichment (typeCode, registration, airline, route, typeName) REPORTED adsbdb and DERIVED klass/wasAirborne/renderAltitudeM.
+- Breaking change explicitly documented in queries.js JSDoc and I3b-IMPLEMENTATION-REPORT.md. No broad consumers existed in I3a, only tests. Tests updated.
+- positionProvenance Map retained for backward compat internally, synced with full provenance Map.
+- Provenance.js expanded with via validation, DERIVED requires via.
+- Enrichment provenance implemented in enrichment.js capturing receipt time via Date.now() at callback.
+- I3b new tests 22 (18+4), total 149 pass (35 I3a +22 I3b +92 I2+records).
+- Architecture checks still OK, I2 closed, D9 untouched, military deferred.
+
+See docs/planning/I3b-IMPLEMENTATION-REPORT.md for full deliverable.
+
+**End of I3b EVOLUTION NOTE.**
+

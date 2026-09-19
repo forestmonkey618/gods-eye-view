@@ -167,11 +167,15 @@ test('provenance primitive: no registry, no observation ID — only epistemic se
   // No global registry imported, no PROVIDER_ID enum
   const prov1 = createProvenance({ epistemic: 'reported', sourceId: 'custom-source', receivedAtMs: 1 });
   assert.equal(prov1.sourceId, 'custom-source');
-  const prov2 = createProvenance({ epistemic: 'derived', sourceId: 'my-deriver' });
+  const prov2 = createProvenance({ epistemic: 'derived', via: 'classification' });
   assert.equal(prov2.epistemic, 'derived');
   // derived/modeled/interpreted do not require receivedAtMs? Actually spec says REPORTED requires, others not necessarily — check implementation
   // Our implementation requires receivedAtMs only for REPORTED, which matches I3a
   assert.equal(prov2.receivedAtMs, null);
+  assert.equal(prov2.via, 'classification');
+  // via optional for REPORTED, required for DERIVED in I3b
+  const prov3 = createProvenance({ epistemic: 'derived', via: 'render-altitude-selection' });
+  assert.equal(prov3.via, 'render-altitude-selection');
 });
 
 test('provenance primitive: EPISTEMIC frozen 4 values only', () => {
