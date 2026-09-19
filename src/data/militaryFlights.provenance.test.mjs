@@ -65,6 +65,54 @@ function mockFeed(t, { now, cache = 'MISS', ageMs = 0, row = {} }) {
   );
 }
 
+/** No descriptor set may exist for a key the store does not currently hold. */
+function assertNoOrphans() {
+  const held = new Set(
+    militaryFlightsLayer.getCurrentEntities().map((e) => e.icao24),
+  );
+  for (const key of militaryFlightsLayer.getProvenanceMap().keys())
+    assert.equal(
+      held.has(key),
+      true,
+      `${key}: descriptor set without a record`,
+    );
+}
+
+/** A viewer stub rich enough for the real init()/destroy() lifecycle. */
+function lifecycleViewer() {
+  const canvas = {
+    addEventListener() {},
+    removeEventListener() {},
+    clientWidth: 100,
+    clientHeight: 100,
+    getBoundingClientRect: () => ({ left: 0, top: 0 }),
+  };
+  return {
+    camera: { positionCartographic: null },
+    scene: {
+      primitives: { add: (p) => p, remove() {}, raiseToTop() {} },
+      canvas,
+    },
+    trackedEntityChanged: new Cesium.Event(),
+    entities: new Cesium.EntityCollection(),
+  };
+}
+
+function withDom(t) {
+  const realDocument = globalThis.document;
+  const realWindow = globalThis.window;
+  globalThis.document = {
+    body: { classList: { contains: () => false } },
+    addEventListener() {},
+    removeEventListener() {},
+  };
+  globalThis.window = new EventTarget();
+  t.after(() => {
+    globalThis.document = realDocument;
+    globalThis.window = realWindow;
+  });
+}
+
 test('a live adsb.lol batch yields REPORTED military provenance with truthful readsb times', async (t) => {
   const receivedAt = 1_800_000_000_000;
   const viewer = { camera: { positionCartographic: null }, scene: {} };
@@ -188,6 +236,75 @@ test('a missing kinematic on a later poll is stored as 0 without a descriptor; i
   assert.equal(after.position.receivedAtMs, now, 'position was replaced');
 });
 
+test('FROZEN RULE end to end — gs/track 0 are REPORTED, absent gs/track are synthetic 0 without a descriptor', async (t) => {
+  let now = 1_800_000_350_000;
+  const viewer = { camera: { positionCartographic: null }, scene: {} };
+  seed(viewer);
+  mockFeed(t, { now: () => now, row: { gs: 0, track: 0 } });
+  await militaryFlightsLayer.update(viewer);
+  let record = militaryFlightsLayer
+    .getAnalystRecords()
+    .find((e) => e.icao24 === ICAO);
+  let prov = militaryFlightsLayer.getProvenanceMap().get(ICAO);
+  assert.equal(record.speedMps, 0);
+  assert.equal(record.heading, 0);
+  assert.equal(prov.speedMps.epistemic, EPISTEMIC.REPORTED);
+  assert.equal(prov.speedMps.sourceId, 'adsb.lol');
+  assert.equal(prov.track.reportedAtMs, now - 1_000);
+  assertNoOrphans();
+
+  now += 20_000;
+  mockFeed(t, { now: () => now, row: { gs: undefined, track: undefined } });
+  await militaryFlightsLayer.update(viewer);
+  record = militaryFlightsLayer
+    .getAnalystRecords()
+    .find((e) => e.icao24 === ICAO);
+  prov = militaryFlightsLayer.getProvenanceMap().get(ICAO);
+  assert.equal(record.speedMps, 0, 'value semantics untouched: synthetic 0');
+  assert.equal(record.heading, 0);
+  assert.equal(
+    'speedMps' in prov,
+    false,
+    'synthetic 0 is not presented as reported',
+  );
+  assert.equal('track' in prov, false);
+  assertNoOrphans();
+});
+
+test('the absence sweep forgets the record and its descriptors together (stale polls keep both)', async (t) => {
+  let now = 1_800_000_500_000;
+  const viewer = { camera: { positionCartographic: null }, scene: {} };
+  seed(viewer);
+  mockFeed(t, { now: () => now });
+  await militaryFlightsLayer.update(viewer);
+  assert.equal(militaryFlightsLayer.getProvenanceMap().size, 1);
+  assertNoOrphans();
+  // MISSING_POLL_LIMIT (3) complete polls without the aircraft: two 'stale'
+  // polls retain record + descriptors, the third removes both.
+  for (let miss = 1; miss <= 3; miss++) {
+    now += 60_000;
+    t.mock.method(Date, 'now', () => now);
+    t.mock.method(globalThis, 'fetch', async () =>
+      Response.json({ now, ac: [] }, { headers: { 'X-ADS-B-Cache': 'MISS' } }),
+    );
+    await militaryFlightsLayer.update(viewer);
+    const entities = militaryFlightsLayer.getCurrentEntities().length;
+    const descriptors = militaryFlightsLayer.getProvenanceMap().size;
+    if (miss < 3) {
+      assert.equal(entities, 1, `miss ${miss}: record retained`);
+      assert.equal(
+        descriptors,
+        1,
+        `miss ${miss}: descriptors retained with it`,
+      );
+    } else {
+      assert.equal(entities, 0, 'record aged out');
+      assert.equal(descriptors, 0, 'descriptors aged out with it');
+    }
+    assertNoOrphans();
+  }
+});
+
 test('destroy() leaves no descriptor behind', async (t) => {
   const receivedAt = 1_800_000_400_000;
   const removed = [];
@@ -212,6 +329,57 @@ test('destroy() leaves no descriptor behind', async (t) => {
   } finally {
     globalThis.document = realDocument;
   }
+  assert.equal(militaryFlightsLayer.getCurrentEntities().length, 0);
+  assert.equal(militaryFlightsLayer.getProvenanceMap().size, 0);
+});
+
+test('real init() → poll → destroy() lifecycle: init resets the sidecar with the store, and nothing survives destroy', async (t) => {
+  withDom(t);
+  const now = 1_800_000_600_000;
+  const viewer = lifecycleViewer();
+  // Populate while no viewer is registered so init() is legal afterwards.
+  _setTrackedMilitaryRefreshStateForTest({
+    icao24: ICAO,
+    entity: null,
+    tracked: false,
+    history: [],
+    billboard: {
+      position: Cesium.Cartesian3.fromDegrees(-97, 31, 8000),
+      show: true,
+    },
+    billboardCollection: { show: true, remove() {} },
+    viewer: null,
+    meta: { rawLat: 31, rawLon: -97, onGround: false },
+  });
+  mockFeed(t, { now: () => now });
+  await militaryFlightsLayer.update(viewer);
+  assert.equal(
+    militaryFlightsLayer.getProvenanceMap().size,
+    1,
+    'populated before init',
+  );
+
+  militaryFlightsLayer.init(viewer);
+  assert.equal(
+    militaryFlightsLayer.getCurrentEntities().length,
+    0,
+    'init resets the store',
+  );
+  assert.equal(
+    militaryFlightsLayer.getProvenanceMap().size,
+    0,
+    'init resets the sidecar with it',
+  );
+
+  await militaryFlightsLayer.update(viewer);
+  assert.equal(militaryFlightsLayer.getCurrentEntities().length, 1);
+  assert.equal(
+    militaryFlightsLayer.getProvenanceMap().get(ICAO).position.sourceId,
+    'adsb.lol',
+  );
+  assertNoOrphans();
+
+  militaryFlightsLayer.destroy(viewer);
   assert.equal(militaryFlightsLayer.getCurrentEntities().length, 0);
   assert.equal(militaryFlightsLayer.getProvenanceMap().size, 0);
 });

@@ -143,11 +143,11 @@ The only cache-adjacent *truth* bug found was not in the cache: civil `destroy()
 
 ## Part G — Tests
 
-New files (23 tests, all executing production code paths):
+New files (35 tests after final verification, all executing production code paths):
 
-- `src/layers/military/provenance.test.mjs` (16) — production `MilitaryFlightRecords` (+ production `readsbSnapshot` for the TIS-B case, + production `FlightRecords` for the same-ICAO case): REPORTED position with `adsb.lol`; seen_pos vs seen mapping; db-backed identity `reportedAtMs null`; missing `seen` → null (no borrowed time); one receipt per batch; sticky retention keeps descriptor; replacement; ground row retention; synthetic 0 carries no descriptor and reported 0 does; DERIVED via names, no feed id; bookkeeping never tagged (exact key set); no-source batch → no REPORTED, stale dropped; TIS-B native key; civil vs military store-local; `forget()`; current-only shape.
-- `src/data/militaryFlights.provenance.test.mjs` (5) — mocked `/api/adsblol/mil` response through the real layer (`createAdsbLolSource → readsbSnapshot → applySnapshot → receive`) read via the production `getProvenanceMap()`: truthful readsb times; proxy-cache age counted; accessor copy safety + `getCurrentEntities()`/`getAnalystRecords()` provenance-unaware; missing kinematic on a later poll; `destroy()` leaves nothing.
-- `src/data/flights.provenance.lifecycle.test.mjs` (2) — civil activation sweep forgets record AND descriptors; civil `destroy()` clears descriptors. Both verified to FAIL without the fixes.
+- `src/layers/military/provenance.test.mjs` (22) — production `MilitaryFlightRecords` (+ production `readsbSnapshot` for the TIS-B case, + production `FlightRecords` for the same-ICAO case): REPORTED position with `adsb.lol`; seen_pos vs seen mapping; db-backed identity `reportedAtMs null`; missing `seen` → null (no borrowed time); one receipt per batch; sticky retention keeps descriptor; replacement; ground row retention; synthetic 0 carries no descriptor and reported 0 does; DERIVED via names, no feed id; bookkeeping never tagged (exact key set); no-source batch → no REPORTED, stale dropped; TIS-B native key; civil vs military store-local; `forget()`; current-only shape.
+- `src/data/militaryFlights.provenance.test.mjs` (8) — mocked `/api/adsblol/mil` response through the real layer (`createAdsbLolSource → readsbSnapshot → applySnapshot → receive`) read via the production `getProvenanceMap()`: truthful readsb times; proxy-cache age counted; accessor copy safety + `getCurrentEntities()`/`getAnalystRecords()` provenance-unaware; missing kinematic on a later poll; `destroy()` leaves nothing.
+- `src/data/flights.provenance.lifecycle.test.mjs` (5) — civil activation sweep forgets record AND descriptors; civil `destroy()` clears descriptors. Both verified to FAIL without the fixes.
 
 ---
 
@@ -177,8 +177,8 @@ None triggered: no military storage redesign (a sidecar Map, same as civil); tru
 16. **Memory estimate:** ~1–1.5 KB per aircraft; ~0.5–2 MB typical, <5 MB worst case for the military feed.
 17. **Scope chosen:** military current-field provenance (allowed item 1) + tiny civil lifecycle/sweep provenance cleanup (allowed item 2, truth bug) + tests/docs. NOT done: turnRateDps (no provenance), cache (I5), unit-conversion `via` (not needed), any vessel/satellite/UI/registry work.
 18. **Files changed (10 modified, 3 new tests, 1 new doc):** `src/layers/military/records.js` (sidecar + `_recordProvenance` + `forget`), `src/layers/military/snapshotRenderer.js` (pass `sourceId`/`receivedAtMs`), `src/layers/military/queries.js` (`getProvenanceMap`), `src/layers/military/lifecycle.js` (init/destroy clear), `src/layers/military/testing.js` (seam clear), `src/layers/flights/lifecycle.js` (init/destroy clear), `src/layers/flights/tracking.js` (sweep uses `records.forget`), `src/layers/flights/evidence.js` (dev fleet replacement clears), `src/layers/flights/testing.js` (seam clear + `_onMilitaryActiveChangeForTest`), `scripts/package-boundaries.json` (see 23); new `src/layers/military/provenance.test.mjs`, `src/data/militaryFlights.provenance.test.mjs`, `src/data/flights.provenance.lifecycle.test.mjs`, `docs/planning/I3c-IMPLEMENTATION-REPORT.md`; status lines touched in `docs/planning/I3-DESIGN-REDUCTION-ADDENDUM.md` and `docs/planning/I3b-IMPLEMENTATION-REPORT.md`.
-19. **Tests added:** 23 (16 + 5 + 2), Part G.
-20. **Test totals:** provenance-focused command (I3b's 155-test baseline + 3 new files) → **178 pass / 0 fail**. Full `npm test` (Node 22.22.3; engines say ≥24 so GC probes skip): **4346 tests, 4343 pass, 2 fail, 1 skipped** vs baseline on `main` **4323 / 4320 / 2 / 1**. The 2 failures are PRE-EXISTING on `main` and untouched: `src/data/flights.test.mjs:57` and `src/data/militaryFlights.test.mjs:53` ("full record maps every contract field") — their deep-equal expectations predate the I2a `entityKey` field on analyst records. Recommend the owner authorize that one-line expectation fix separately (I2 test debt, out of I3c scope).
+19. **Tests added:** 35 after final verification (records-level 22, military end-to-end 8, civil lifecycle 5), Part G + V3–V5.
+20. **Test totals:** provenance-focused command (I3b's 155-test baseline + 3 new files) → **190 pass / 0 fail**. Full `npm test` (Node 22.22.3; engines say ≥24 so GC probes skip): **4358 tests, 4355 pass, 2 fail, 1 skipped** vs baseline on `main` **4323 / 4320 / 2 / 1** (see V1 for the byte-identical failure blocks). The 2 failures are PRE-EXISTING on `main` and untouched: `src/data/flights.test.mjs:57` and `src/data/militaryFlights.test.mjs:53` ("full record maps every contract field") — their deep-equal expectations predate the I2a `entityKey` field on analyst records. Recommend the owner authorize that one-line expectation fix separately (I2 test debt, out of I3c scope).
 21. **Identity check:** `node scripts/check-identity-authority.mjs` → OK.
 22. **Spatial check:** `node scripts/check-spatial-authority.mjs` → OK (7 frozen reasoned sites, no new raw distance code).
 23. **Other boundary checks:** `check-import-directions` → OK (719 modules, 54 portable entries). `npm run check:boundaries` **FAILED on `main`** (pre-existing: `src/data/entityKey.js`, `src/data/provenance.js`, `src/layers/flights/enrichmentCore.js` were never registered in `scripts/package-boundaries.json` by I2/I3a/I3b; CI never ran on this fork so nothing caught it). Registered them in the groups that import them (civil-flights, military-flights, vessel-layer, application-components, application-layer-construction, civil-flight-records, military-flight-records — manifest only, no behaviour) → now **passes**. `npm run format:check` also fails on `main` (9 files, all pre-existing I1/I2/I3a/I3b debt); after I3c 8 remain (`src/data/{analystEngine,entityKey,geo,provenance,recordIndex}.js`, `src/layers/flights/records.js`, `src/sources/live/{aircraft,standalone}.js`) — deliberately NOT reformatted here (closed-module churn); every file I3c touched is Prettier-clean.
@@ -189,3 +189,75 @@ None triggered: no military storage redesign (a sidecar Map, same as civil); tru
 28. **Remaining gaps:** (a) pre-existing military `speedMps`/`track` `?? 0` / `|| 0` coercion defeats sticky retention — rendering-affecting, needs owner authorization; (b) `observedAtMs` ignores payload `now` (≤1–2 s late bias on readsb-derived report times) — normalizer, I5-adjacent; (c) proxy-cache age of adsbdb enrichment not surfaced (I5); (d) same-lifetime `_enrichSeen` blocks re-enrichment of recreated records (functional, pre-existing); (e) `format:check` debt and the 2 `entityKey` test expectations on `main`; (f) MODELED (ground floor / geoid N inputs) and INTERPRETED remain unassigned by design; (g) vessels/satellites/other families untouched by design.
 29. **Can AIRCRAFT I3 be declared complete?** Yes for CURRENT aircraft field provenance in both stores under the locked I3 contract: every analyst-visible current aircraft value in `FlightRecords` and `MilitaryFlightRecords` now carries a truthful REPORTED or DERIVED descriptor that follows the current value, with store-local accessors, lifecycle hygiene and production-path tests. Items 28(a)–(d) are value-semantics/freshness issues owned elsewhere, not provenance gaps.
 30. **ONE next step:** owner review of this slice; then decide whether I3 closes for aircraft and the next family (vessels: `src/layers/vessels/records.js`, static vs position message times) opens as I3d — or whether item 28(a) (speed/track coercion) is authorized first as a separate rendering-affecting fix.
+
+---
+
+## FINAL VERIFICATION (2026-09-19, owner-requested; no scope expansion)
+
+### V1. Full-suite baseline proof (same command, `npm test`, Node v22.22.3)
+
+Run A — `main` @ `a5b8e33` (detached worktree, shared `node_modules`): **4323 tests, 4320 pass, 2 fail, 1 skipped**, exit 1.
+Run B — I3c head: **4346 tests, 4343 pass, 2 fail, 1 skipped**, exit 1.
+
+| # | Test file | Test name | Assertion / error | main | I3c |
+|---|---|---|---|---|---|
+| 1 | `src/data/flights.test.mjs:57` | `flights analyst record: full record maps every contract field` | `deepStrictEqual` — actual contains `entityKey: 'aircraft:icao24:a1b2c3'`, expected object lacks `entityKey` (I2a field; every other key/value identical) | FAIL | FAIL (identical block) |
+| 2 | `src/data/militaryFlights.test.mjs:53` | `military analyst record: full record maps every contract field` | `deepStrictEqual` — actual contains `entityKey: 'aircraft:icao24:ae01ce'`, expected lacks it (every other key/value identical) | FAIL | FAIL (identical block) |
+
+The two `not ok` blocks are byte-identical after normalizing repository path and test ordinal (`diff` empty). The skipped test is the same in both runs (`Windows production hardener applies its exact DACL with native tools # SKIP`). Subtest-name set difference: +35 in I3c (the three new files), −0. I3c introduces **no new failure**; the two failures were **not** modified (I2 test debt, not broken by I3c — the identical actual objects on both runs also prove `getAnalystRecords()` output is unchanged).
+
+### V2. Package-boundary manifest
+
+- `npm run check:boundaries` on `main` @ `a5b8e33`: **FAIL** — `[check-package-ownership] Package boundary civil-flights imports an unowned module: src/data/entityKey.js` (the checker stops at the first violating group; the pre-implementation audit enumerated all seven: civil-flights, military-flights, vessel-layer, application-components, application-layer-construction, civil-flight-records → entityKey/provenance/enrichmentCore as listed in Part J item 23).
+- `npm run check:boundaries` on I3c: **PASS** — 109 groups checked, then `SPATIAL AUTHORITY: OK`.
+- What the rule is (`scripts/check-package-boundaries.mjs`): every module Vite/Rollup actually loads while building a group's declared `exports` must be in that group's `modules` list; `external` entries must be declared dependencies; tree-shaking is disabled so unused imports still count. It is an *ownership declaration* check.
+- Diff of the manifest (structural comparison of `a5b8e33` vs head): 109 groups before and after; **no `exports`, `external` or `runtime` field changed; no module removed**; 7 groups gained modules — `src/data/entityKey.js` (I2, approved), `src/data/provenance.js` (I3a, approved), `src/layers/flights/enrichmentCore.js` (I3b, approved) — each exactly where the pre-implementation audit showed that group already imported it, plus `src/data/provenance.js` in `military-flights`/`military-flight-records` for I3c's new import (layer → data direction, same as `aircraftMeta.js`). No rule was weakened, broadened or bypassed; nothing to revert.
+
+### V3. Military synthetic zero — frozen rule
+
+Rule (in `MilitaryFlightRecords._recordProvenance`): a REPORTED descriptor for `speedMps`/`track` is created **only** when the raw observation carries a finite `speedMps`/`courseDeg`; otherwise the descriptor is deleted. The store's value semantics are untouched.
+
+| Case | Input | Stored value | Descriptor |
+|---|---|---|---|
+| A | reported `gs: 0` / `speedMps: 0` | `0` | REPORTED `adsb.lol`, `reportedAtMs = contactTimeMs` |
+| B | `gs` absent / `speedMps: null|undefined` | `0` (production coercion `?? 0`) | **none** |
+| C | reported `track: 0` / `courseDeg: 0` | `0` (`0 || 0`) | REPORTED `adsb.lol`, `contactTimeMs` |
+| D | `track` absent / `courseDeg: null` | `0` (`|| 0`) | **none** |
+
+Tests: `src/layers/military/provenance.test.mjs` — `FROZEN RULE — reported speed 0 …` (A, B incl. `undefined`), `FROZEN RULE — reported track 0 …` (C, D), `FROZEN RULE holds through the production readsb normalizer` (A–D via `readsbSnapshot`, proving `finite(0)` keeps the zero), plus the earlier sequence test (reported → missing → descriptor removed → reported 0 → descriptor back); `src/data/militaryFlights.provenance.test.mjs` — `FROZEN RULE end to end` (through the real layer and `getProvenanceMap()`; analyst `speedMps`/`heading` are `0` in both polls, only the descriptor differs).
+
+**Separate future correctness issue (NOT an I3 provenance issue, NOT fixed here):** `src/layers/military/records.js` coerces `speedMps = aircraft.speedMps ?? 0` and `track = aircraft.courseDeg || 0` *before* the sticky merge, so a poll that lacks gs/track overwrites the last known speed/track with 0 instead of retaining it (the civil store retains). This affects rendering/labels/dead-reckoning and must be authorized separately; provenance already tells the two zeros apart.
+
+### V4. DERIVED truthfulness
+
+Evidence that production always produces the three derived values: `klass = classifyAircraft(...)` returns a non-empty string on every path (`'airliner'` default, `src/data/aircraftClass.js`); `wasAirborne = prevMeta?.wasAirborne === true || !onGround` is always boolean; `renderAltitudeM` is `pickRenderAltitudeM(...) ?? altitudeM` (always a finite number: baro, last-known baro, `0` or `3048`) optionally passed through `floorAltitudeM`, which returns its finite input when no floor is known (`src/services/groundFloor.js:60`). Test `DERIVED evidence — production always yields …` asserts value existence and descriptors across five observation variants (full row, no type/category, ground row without any altitude, airborne without any altitude, TIS-B).
+
+Guard added (I3c code only): `_recordProvenance` attaches `klass`/`wasAirborne`/`renderAltitudeM` descriptors **only if** the value in the record just written exists (non-empty string / boolean / finite number); otherwise it deletes the descriptor. Test `DERIVED guard — …` injects a ground-floor service yielding `NaN` and proves no `render-altitude-selection` descriptor is attached; verified to fail without the guard. The civil store (I3b, approved) is unchanged; its production paths give the same always-present guarantee.
+
+### V5. Lifecycle cleanup — production-path proofs
+
+Civil (`src/data/flights.provenance.lifecycle.test.mjs`, real `flightsLayer` + mocked OpenSky response):
+- Military-layer activation sweep (`_onMilitaryActiveChange(true)`) removes record **and** descriptors.
+- Poll-time suppression branch removes both.
+- Absence sweep: two `stale` polls retain record + descriptors, the third (`MISSING_POLL_LIMIT = 3`) removes both.
+- `destroy()` clears descriptors.
+- Real `init()` (stubbed viewer/DOM) resets store and sidecar together; a following poll repopulates consistently; `destroy()` leaves nothing.
+- Every step asserts the orphan invariant `getProvenanceMap().keys ⊆ getCurrentEntities().icao24`. Ordinary `forget()` at store level is covered by the I3b tests (`provenance.test.mjs:234`, `provenance.b.test.mjs:284`).
+
+Military (`src/data/militaryFlights.provenance.test.mjs` + `src/layers/military/provenance.test.mjs`): same set — absence sweep (stale ×2 then removal), `destroy()`, real `init()` → poll → `destroy()`, `forget()`, plus the store-level invariant test (`INVARIANT — across a mixed receive/forget sequence …`) which after every step checks that each descriptor sits on a field whose current value exists and that no descriptor key lacks a record.
+
+Falsification check: with `src/layers/flights/lifecycle.js` and `src/layers/military/lifecycle.js` reverted to `a5b8e33`, exactly the four init/destroy tests fail; with `tracking.js` reverted, the activation-sweep test fails.
+
+### V6. API freeze — evidence
+
+- `git diff a5b8e33 -- src/data/provenance.js src/data/recordIndex.js src/data/entityKey.js src/data/analystEngine.js` → empty. No file under `src/data/` other than the three new test files was changed.
+- Civil `getCurrentEntities()`: exact key set `altitudeM, callsign, entityKey, icao24, lat, lon` asserted (new) + I2 `currentEntities.test.mjs` green. Military `getCurrentEntities()`: same exact key set asserted.
+- `getAnalystRecords()`: identical actual objects on main and I3c in V1; tests assert no `provenance|epistemic|sourceId` keys in either store's analyst records.
+- No history: one frozen five-key descriptor per field, one Map entry per record after repeated polls (asserted); no arrays anywhere in the sidecar.
+- Changed files (complete list): military `records/snapshotRenderer/queries/lifecycle/testing`, civil `lifecycle/tracking/evidence/testing`, `scripts/package-boundaries.json`, three test files, three planning docs. No I4 (`sourceRegistry`), I5 (coverage/freshness), I6 (analyst engine/UI), I9 (events) or D9 (proximity) file was touched; no freshness policy, age computation or event was added.
+
+### V7. Aircraft I3 exit decision
+
+Criteria: civil current meaningful values covered (I3b) ✔; military current meaningful values covered (I3c) ✔; sticky/replacement semantics truthful (retention keeps the original descriptor; replacement moves it; synthetic fallbacks carry none) ✔; source/receipt/report timestamps truthful within source limits (OpenSky `time_position`/`last_contact`; readsb `seen_pos`/`seen`; null for database attributes and adsbdb enrichment) ✔; derived values distinguished from reported (DERIVED + `via`, never the feed id, only when the value exists) ✔; enrichment provenance truthful (`adsbdb`, `reportedAtMs null`, genuine client receipt, retention keeps the old receipt) ✔; lifecycle cleanup correct (forget / absence / suppression / init / destroy, both stores, production-path tested) ✔; no known provenance bug requiring another aircraft slice ✔ (the speed/track coercion is a value-semantics issue; proxy-cache age is I5; turnRateDps is internal motion state).
+
+**AIRCRAFT I3 COMPLETE.**

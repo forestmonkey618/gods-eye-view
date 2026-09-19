@@ -435,3 +435,271 @@ test('the sidecar holds CURRENT descriptors only — no arrays, no previous valu
   }
   assert.equal(prov.position.receivedAtMs, RECEIPT_MS + 4 * 15_000);
 });
+
+// ---------------------------------------------------------------------------
+// Final verification — frozen rules.
+// ---------------------------------------------------------------------------
+
+/** Every descriptor must sit on a field whose CURRENT value exists in `data`. */
+function assertProvenanceFollowsValue(records) {
+  for (const [id, prov] of records.provenance) {
+    const meta = records.data.get(id);
+    assert.ok(meta, `${id}: descriptor set without a record`);
+    for (const [field, descriptor] of Object.entries(prov)) {
+      assert.equal(isValidProvenance(descriptor), true, `${id}.${field}`);
+      if (field === 'position') {
+        assert.equal(Number.isFinite(meta.rawLat), true, `${id}.position`);
+        assert.equal(Number.isFinite(meta.rawLon), true, `${id}.position`);
+        continue;
+      }
+      assert.equal(field in meta, true, `${id}.${field} is not a store field`);
+      const value = meta[field];
+      const present =
+        typeof value === 'boolean' ||
+        (typeof value === 'string' && value.trim().length > 0) ||
+        Number.isFinite(value);
+      assert.equal(present, true, `${id}.${field} descriptor without a value`);
+    }
+  }
+  for (const id of records.provenance.keys())
+    assert.equal(
+      records.data.has(id),
+      true,
+      `${id}: descriptor outlived record`,
+    );
+}
+
+test('FROZEN RULE — reported speed 0 is REPORTED; missing speed is a synthetic 0 with NO descriptor', () => {
+  // A. reported speed = 0 (first poll, no prior state)
+  const a = store();
+  a.receive(observation({ speedMps: 0 }), batch());
+  assert.equal(a.data.get('ae01ce').speedMps, 0);
+  assert.deepEqual(a.provenance.get('ae01ce').speedMps, reported(CONTACT_MS));
+  // B. missing speed -> production coerces to synthetic 0
+  const b = store();
+  b.receive(observation({ speedMps: null }), batch());
+  assert.equal(
+    b.data.get('ae01ce').speedMps,
+    0,
+    'synthetic 0 (value semantics untouched)',
+  );
+  assert.equal(
+    'speedMps' in b.provenance.get('ae01ce'),
+    false,
+    'no descriptor',
+  );
+  const bUndefined = store();
+  bUndefined.receive(observation({ speedMps: undefined }), batch());
+  assert.equal(bUndefined.data.get('ae01ce').speedMps, 0);
+  assert.equal('speedMps' in bUndefined.provenance.get('ae01ce'), false);
+  assertProvenanceFollowsValue(a);
+  assertProvenanceFollowsValue(b);
+});
+
+test('FROZEN RULE — reported track 0 is REPORTED; missing track is a synthetic 0 with NO descriptor', () => {
+  // C. reported track = 0 (due north) — `courseDeg || 0` still yields the reported 0
+  const c = store();
+  c.receive(observation({ courseDeg: 0 }), batch());
+  assert.equal(c.data.get('ae01ce').track, 0);
+  assert.deepEqual(c.provenance.get('ae01ce').track, reported(CONTACT_MS));
+  // D. missing track -> synthetic 0
+  const d = store();
+  d.receive(observation({ courseDeg: null }), batch());
+  assert.equal(d.data.get('ae01ce').track, 0);
+  assert.equal('track' in d.provenance.get('ae01ce'), false);
+  assertProvenanceFollowsValue(c);
+  assertProvenanceFollowsValue(d);
+});
+
+test('FROZEN RULE holds through the production readsb normalizer (gs/track 0 vs absent)', () => {
+  const rows = [
+    { hex: 'aa0000', gs: 0, track: 0 }, // genuinely reported zeros
+    { hex: 'aa0001' }, // gs/track absent
+  ].map((row) => ({
+    lat: 31,
+    lon: -97,
+    alt_baro: 1000,
+    seen: 1,
+    seen_pos: 2,
+    ...row,
+  }));
+  const snapshot = readsbSnapshot(
+    { ac: rows },
+    { observedAtMs: RECEIPT_MS, receivedAtMs: RECEIPT_MS, now: RECEIPT_MS },
+  );
+  const records = store();
+  for (const row of snapshot.records)
+    records.receive(row, {
+      observedAtMs: snapshot.observedAtMs,
+      floorWarmPoints: [],
+      modelOwnsVisual: false,
+      sourceId: snapshot.sourceId,
+      receivedAtMs: snapshot.receivedAtMs,
+    });
+  const zero = records.data.get('aa0000');
+  const missing = records.data.get('aa0001');
+  assert.equal(zero.speedMps, 0);
+  assert.equal(zero.track, 0);
+  assert.equal(missing.speedMps, 0, 'stored value is indistinguishable...');
+  assert.equal(missing.track, 0);
+  assert.deepEqual(
+    records.provenance.get('aa0000').speedMps,
+    reported(CONTACT_MS),
+  );
+  assert.deepEqual(
+    records.provenance.get('aa0000').track,
+    reported(CONTACT_MS),
+  );
+  assert.equal(
+    'speedMps' in records.provenance.get('aa0001'),
+    false,
+    '...only provenance tells them apart',
+  );
+  assert.equal('track' in records.provenance.get('aa0001'), false);
+  assertProvenanceFollowsValue(records);
+});
+
+test('DERIVED evidence — production always yields klass, wasAirborne and renderAltitudeM, so all three carry descriptors', () => {
+  const variants = [
+    observation(),
+    observation({ typeCode: '', category: null }), // classification falls to its default
+    observation({
+      onGround: true,
+      baroAltitudeM: null,
+      ellipsoidAltitudeM: null,
+    }), // "ground" row, no altitude at all
+    observation({ baroAltitudeM: null, ellipsoidAltitudeM: null }), // airborne, never any altitude
+    observation({
+      id: '~a1b2c3',
+      reference: '~a1b2c3',
+      typeCode: '',
+      callsign: '',
+    }), // TIS-B
+  ];
+  for (const [index, variant] of variants.entries()) {
+    const records = store();
+    records.receive(variant, batch());
+    const meta = records.data.get(variant.id);
+    const prov = records.provenance.get(variant.id);
+    assert.equal(
+      typeof meta.klass === 'string' && meta.klass.length > 0,
+      true,
+      `variant ${index} klass`,
+    );
+    assert.equal(
+      typeof meta.wasAirborne,
+      'boolean',
+      `variant ${index} wasAirborne`,
+    );
+    assert.equal(
+      Number.isFinite(meta.renderAltitudeM),
+      true,
+      `variant ${index} renderAltitudeM`,
+    );
+    assert.equal(prov.klass.via, 'classification');
+    assert.equal(prov.wasAirborne.via, 'airborne-history');
+    assert.equal(prov.renderAltitudeM.via, 'render-altitude-selection');
+    assertProvenanceFollowsValue(records);
+  }
+});
+
+test('DERIVED guard — a derived value that does not exist gets no descriptor merely because the derivation ran', () => {
+  // Injected ground-floor service that fails to yield a height for a low
+  // airborne contact: renderAltitudeM becomes non-finite, so the store must
+  // not claim a render-altitude-selection for it.
+  const records = new MilitaryFlightRecords({
+    geoidHeight: () => 40,
+    cachedGroundFloor: () => 200,
+    floorAltitudeM: () => NaN,
+  });
+  records.receive(
+    observation({ baroAltitudeM: 100, ellipsoidAltitudeM: null }),
+    batch(),
+  );
+  const meta = records.data.get('ae01ce');
+  const prov = records.provenance.get('ae01ce');
+  assert.equal(Number.isFinite(meta.renderAltitudeM), false);
+  assert.equal('renderAltitudeM' in prov, false);
+  assert.equal(prov.klass.via, 'classification');
+  assert.equal(prov.wasAirborne.via, 'airborne-history');
+  assertProvenanceFollowsValue(records);
+});
+
+test('INVARIANT — across a mixed receive/forget sequence no descriptor ever outlives or outruns its value', () => {
+  const records = store();
+  const steps = [
+    ['ae0001', observation({ id: 'ae0001', reference: 'ae0001' })],
+    [
+      'ae0002',
+      observation({
+        id: 'ae0002',
+        reference: 'ae0002',
+        speedMps: null,
+        courseDeg: null,
+        callsign: '',
+        typeCode: '',
+      }),
+    ],
+    [
+      '~b00001',
+      observation({
+        id: '~b00001',
+        reference: '~b00001',
+        typeCode: '',
+        registration: '',
+        operator: '',
+      }),
+    ],
+    [
+      'ae0001',
+      observation({
+        id: 'ae0001',
+        reference: 'ae0001',
+        onGround: true,
+        baroAltitudeM: null,
+        ellipsoidAltitudeM: null,
+        verticalRateMps: null,
+      }),
+    ],
+    [
+      'ae0002',
+      observation({ id: 'ae0002', reference: 'ae0002', contactTimeMs: null }),
+    ],
+    ['ae0001', 'forget'],
+    [
+      'ae0003',
+      observation({
+        id: 'ae0003',
+        reference: 'ae0003',
+        speedMps: 0,
+        courseDeg: 0,
+      }),
+    ],
+    ['ae0002', 'forget'],
+    [
+      '~b00001',
+      observation({
+        id: '~b00001',
+        reference: '~b00001',
+        callsign: '',
+        ellipsoidAltitudeM: null,
+      }),
+    ],
+  ];
+  let poll = 0;
+  for (const [id, step] of steps) {
+    if (step === 'forget') records.forget(id);
+    else {
+      const at = RECEIPT_MS + poll++ * 15_000;
+      records.receive(step, batch({ observedAtMs: at, receivedAtMs: at }));
+    }
+    assertProvenanceFollowsValue(records);
+    for (const key of records.provenance.keys())
+      assert.equal(records.data.has(key), true);
+  }
+  assert.deepEqual([...records.data.keys()].sort(), ['ae0003', '~b00001']);
+  assert.deepEqual([...records.provenance.keys()].sort(), [
+    'ae0003',
+    '~b00001',
+  ]);
+});

@@ -351,12 +351,31 @@ export class MilitaryFlightRecords {
     );
 
     // Locally computed — DERIVED, same `via` vocabulary as the civil store.
-    const klass = derivedProvenance('classification');
-    if (klass) next.klass = klass;
-    const airborne = derivedProvenance('airborne-history');
-    if (airborne) next.wasAirborne = airborne;
-    const render = derivedProvenance('render-altitude-selection');
-    if (render) next.renderAltitudeM = render;
+    // A descriptor is attached only when the derived value actually exists in
+    // the record just written (production always yields all three — see
+    // provenance.test.mjs — but the derivation existing is not the value
+    // existing).
+    const meta = this.data.get(icao24);
+    const derived = (field, present, via) => {
+      const prov = present ? derivedProvenance(via) : null;
+      if (prov) next[field] = prov;
+      else delete next[field];
+    };
+    derived(
+      'klass',
+      typeof meta?.klass === 'string' && meta.klass.length > 0,
+      'classification',
+    );
+    derived(
+      'wasAirborne',
+      typeof meta?.wasAirborne === 'boolean',
+      'airborne-history',
+    );
+    derived(
+      'renderAltitudeM',
+      Number.isFinite(meta?.renderAltitudeM),
+      'render-altitude-selection',
+    );
 
     if (Object.keys(next).length === 0) this.provenance.delete(icao24);
     else this.provenance.set(icao24, next);
