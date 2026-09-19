@@ -25,12 +25,9 @@ export class FlightRecords {
     this.missingPolls = new Map();
     this.geoidNCache = new Map();
     this.geoidReady = false;
-    // I3a: current position provenance sidecar — Map<icao24, provenance descriptor>
-    // Position = rawLat/rawLon/fix. CURRENT only, no history.
-    this.positionProvenance = new Map();
     // I3b: full per-field provenance sidecar — Map<icao24, {field: descriptor}>
     // Each field's provenance follows its current value (sticky retention retains old provenance).
-    // Copy-safe frozen descriptors. CURRENT only, no history.
+    // Copy-safe frozen descriptors. CURRENT only, no history. Single authority (positionProvenance removed after I3b approval).
     this.provenance = new Map();
   }
 
@@ -315,20 +312,9 @@ export class FlightRecords {
     if (hasValidPosition) {
       const prov = tryReported(sourceId, positionReportedAtMs, receivedAtMs);
       if (prov) {
-        this.positionProvenance.set(icao24, prov);
         newProv.position = prov;
       } else {
-        // No source info for new position — remove old to avoid lying
-        if (sourceId == null && receivedAtMs == null) {
-          // Legacy path without source — delete old provenance to avoid stale label
-          const had = this.positionProvenance.get(icao24);
-          if (had) this.positionProvenance.delete(icao24);
-          delete newProv.position;
-        } else {
-          // If we have sourceId but creation failed (invalid), keep absent
-          this.positionProvenance.delete(icao24);
-          delete newProv.position;
-        }
+        delete newProv.position;
       }
     }
     // else retain previous position provenance (do not overwrite)
@@ -484,7 +470,6 @@ export class FlightRecords {
     this.data.delete(id);
     this.missingPolls.delete(id);
     this.geoidNCache.delete(id);
-    this.positionProvenance.delete(id);
     this.provenance.delete(id);
   }
 }

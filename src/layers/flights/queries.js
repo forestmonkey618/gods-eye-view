@@ -813,9 +813,8 @@ export function createQueries({
 
     /**
      * I3b — Current aircraft field provenance sidecar — CURRENT only, per-field.
-     * Evolved from I3a position-only: I3a returned Map<icao24, descriptor> for position.
-     * I3b returns Map<icao24, {field: descriptor}> where each field's provenance follows
-     * its CURRENT value (sticky retention retains old provenance, replacement replaces provenance).
+     * Single authority: FlightRecords.provenance Map<icao24, {field: descriptor}>.
+     * (I3a positionProvenance removed after owner approval of I3b evolution — no compat wrapper needed.)
      *
      * STORE-LOCAL accessor (not canonical): keyed by native icao24 (lowercased hex, preserves ~ for TIS-B), NOT entityKey.
      * This is deliberate: FlightRecords.data Map is keyed by native icao24 (the actual storage key,
@@ -837,19 +836,21 @@ export function createQueries({
      *   category: REPORTED
      *   onGround: REPORTED
      *   lastContactEpochMs: REPORTED
-     *   // enrichment deferred to I3c: typeCode, registration, airline, route, typeName
-     *   klass: {epistemic:'derived', via:'classification', ...}
+     *   typeCode: REPORTED adsbdb
+     *   registration: REPORTED adsbdb
+     *   airline: REPORTED adsbdb
+     *   route: REPORTED adsbdb
+     *   typeName: REPORTED adsbdb
+     *   klass: {epistemic:'derived', via:'classification'}
      *   wasAirborne: {epistemic:'derived', via:'airborne-history'}
      *   renderAltitudeM: {epistemic:'derived', via:'render-altitude-selection'}
      * }
      *
-     * - Position = rawLat/rawLon/fix. Follows retained position.
-     * - Altitude (baro) = stickyNumber with fallback 0/10000 synthetic -> no provenance when fallback.
-     * - geoAltitudeM = non-sticky, null when missing -> no provenance when null.
-     * - velocity/true_track stickyNumber fallback 0 synthetic -> no provenance when fallback, provenance present when reported 0 (distinguishable).
-     * - verticalRate/category/lastContact stickyNumber fallback null -> no provenance when null.
-     * - callsign/originCountry stickyText -> no provenance when empty/null.
-     * - onGround boolean always replacement -> always provenance when source info available.
+     * - Position = rawLat/rawLon/fix. Follows retained position. reportedAtMs = positionTimeMs per OpenSky docs (time_position for last position update, includes baro/geo/onGround).
+     * - Altitude (baro) = stickyNumber fallback 0/10000 synthetic -> no provenance when fallback. reportedAtMs = positionTimeMs (baro altitude part of position report per OpenSky).
+     * - geoAltitudeM = non-sticky, null when missing -> no provenance when null. reportedAtMs = positionTimeMs (geometric altitude part of position).
+     * - onGround = boolean always replacement, reportedAtMs = positionTimeMs (surface position report per OpenSky docs).
+     * - velocity/true_track/verticalRate/callsign/originCountry/category/lastContact = contactTimeMs (last_contact = last update in general, updated for any valid message, includes velocity/track/vertical_rate/callsign/category).
      * - Derived fields always present with DERIVED via, no sourceId required.
      * - TIS-B / noncanonical (entityKey:null) included, keyed by native id (e.g., '~abc123'), no synthetic keys.
      * - CURRENT only: no history, no previous provenance arrays.
@@ -857,8 +858,7 @@ export function createQueries({
      * - getCurrentEntities() remains unchanged and provenance-unaware (I2 primitive-only).
      *
      * Breaking change from I3a: I3a returned Map<icao24, descriptor> (position directly). I3b returns
-     * Map<icao24, {position: descriptor, ...}>. This is explicit evolution, documented, tests updated.
-     * No broad consumers existed in I3a, only tests.
+     * Map<icao24, {position: descriptor, ...}>. Owner approved evolution, no compat wrapper needed.
      *
      * Future canonical consumer join path:
      * - Call getCurrentEntities() which returns both {entityKey, icao24, ...} and use icao24 to lookup this Map.
@@ -869,42 +869,17 @@ export function createQueries({
      * @returns {Map<string, Object>} Map<icao24, {field: provenance descriptor}>
      */
     getProvenanceMap() {
-      // I3b: full per-field provenance sidecar, plus backward-compat positionProvenance fallback
       const fullMap = flightState.records.provenance;
-      const posMap = flightState.records.positionProvenance;
-      if ((!fullMap || fullMap.size === 0) && (!posMap || posMap.size === 0)) return new Map();
+      if (!fullMap || fullMap.size === 0) return new Map();
       const out = new Map();
-      // Prefer full map
-      if (fullMap && fullMap.size > 0) {
-        for (const [icao24, provObj] of fullMap) {
-          if (!provObj || typeof provObj !== 'object') continue;
-          const copy = {};
-          for (const [field, desc] of Object.entries(provObj)) {
-            if (!desc) continue;
-            copy[field] = { ...desc };
-          }
-          if (Object.keys(copy).length > 0) out.set(icao24, copy);
+      for (const [icao24, provObj] of fullMap) {
+        if (!provObj || typeof provObj !== 'object') continue;
+        const copy = {};
+        for (const [field, desc] of Object.entries(provObj)) {
+          if (!desc) continue;
+          copy[field] = { ...desc };
         }
-        // Merge any position-only entries that might not be in full map (legacy)
-        if (posMap && posMap.size > 0) {
-          for (const [icao24, posProv] of posMap) {
-            if (!posProv) continue;
-            const existing = out.get(icao24);
-            if (existing) {
-              if (!existing.position) existing.position = { ...posProv };
-            } else {
-              out.set(icao24, { position: { ...posProv } });
-            }
-          }
-        }
-        return out;
-      }
-      // Fallback to old position-only map (I3a legacy) — wrap into new shape {position: descriptor}
-      if (posMap && posMap.size > 0) {
-        for (const [icao24, prov] of posMap) {
-          if (!prov) continue;
-          out.set(icao24, { position: { ...prov } });
-        }
+        if (Object.keys(copy).length > 0) out.set(icao24, copy);
       }
       return out;
     },

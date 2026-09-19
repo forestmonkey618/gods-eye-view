@@ -286,10 +286,8 @@ test('I3b provenance: cleanup forget removes all provenance', () => {
   store.geoidReady = true;
   store.receive(obs(), view({ sourceId: 'opensky', receivedAtMs: 1000 }));
   assert.ok(store.provenance.has('abc123'));
-  assert.ok(store.positionProvenance.has('abc123'));
   store.forget('abc123');
   assert.equal(store.provenance.has('abc123'), false);
-  assert.equal(store.positionProvenance.has('abc123'), false);
   assert.equal(store.data.has('abc123'), false);
 });
 
