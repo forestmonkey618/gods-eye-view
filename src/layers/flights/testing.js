@@ -78,6 +78,7 @@ export function createTesting({
     flightState.records.missingPolls = new Map();
     flightState._displayCourse.clear();
     flightState.records.geoidNCache.clear();
+    flightState.records.provenance.clear(); // I3c: seeded meta carries no descriptors
     flightState._trackedIcao = tracked ? icao24 : null;
     flightState._trackedEntity = tracked ? entity : null;
     flightState._trackedModel = null;
@@ -126,6 +127,11 @@ export function createTesting({
 
   function _militaryLayerSuppressesForTest(icao24) {
     return parts.tracking._militaryLayerSuppresses(icao24);
+  }
+
+  /** Drive the Military-layer activation sweep directly (no init/registry). */
+  function _onMilitaryActiveChangeForTest(active) {
+    parts.tracking._onMilitaryActiveChange(active);
   }
 
   /** Arm the deferred restore latch directly, without a full setParams turn. */
@@ -203,6 +209,7 @@ export function createTesting({
     _setFlightTrackingRefreshOutcomeForTest,
     _addFlightTrackingCandidateForTest,
     _militaryLayerSuppressesForTest,
+    _onMilitaryActiveChangeForTest,
     _armFlightTrackingRestoreForTest,
     _pendingFlightTrackingRestoreForTest,
     _applyPendingFlightTrackingRestoreForTest,

@@ -735,7 +735,10 @@
       "src/layers/flights/records.js",
       "src/layers/flights/recordPolicy.js",
       "src/layers/flights/snapshotRenderer.js",
-      "src/data/inputOwnership.js"
+      "src/data/inputOwnership.js",
+      "src/layers/flights/enrichmentCore.js",
+      "src/data/entityKey.js",
+      "src/data/provenance.js"
     ],
     "external": ["cesium"]
   },
@@ -770,7 +773,9 @@
       "src/layers/military/records.js",
       "src/layers/military/recordPolicy.js",
       "src/layers/military/snapshotRenderer.js",
-      "src/data/inputOwnership.js"
+      "src/data/inputOwnership.js",
+      "src/data/entityKey.js",
+      "src/data/provenance.js"
     ],
     "external": ["cesium"]
   },
@@ -819,7 +824,8 @@
       "src/layers/vessels/records.js",
       "src/layers/vessels/recordPolicy.js",
       "src/layers/vessels/snapshotRenderer.js",
-      "src/data/inputOwnership.js"
+      "src/data/inputOwnership.js",
+      "src/data/entityKey.js"
     ],
     "external": ["cesium"]
   },
@@ -1819,7 +1825,10 @@
       "src/director/sharing/lifetime.js",
       "src/director/authoring.js",
       "src/scenes/sharing.js",
-      "src/ui/sceneSharing.js"
+      "src/ui/sceneSharing.js",
+      "src/data/entityKey.js",
+      "src/layers/flights/enrichmentCore.js",
+      "src/data/provenance.js"
     ],
     "external": [
       "@mapbox/vector-tile",
@@ -2214,7 +2223,10 @@
       "src/sources/overpassFeaturesRecords.js",
       "src/sources/overpassFeatures.js",
       "src/sources/featureSource.js",
-      "src/sources/overpassRoads.js"
+      "src/sources/overpassRoads.js",
+      "src/data/entityKey.js",
+      "src/layers/flights/enrichmentCore.js",
+      "src/data/provenance.js"
     ],
     "external": [
       "cesium",
@@ -2353,7 +2365,8 @@
       "src/layers/flights/recordPolicy.js",
       "src/data/aircraftMeta.js",
       "src/data/renderAltitude.js",
-      "src/data/aircraftClass.js"
+      "src/data/aircraftClass.js",
+      "src/data/provenance.js"
     ],
     "external": []
   },
@@ -2372,7 +2385,8 @@
       "src/layers/military/recordPolicy.js",
       "src/data/aircraftMeta.js",
       "src/data/renderAltitude.js",
-      "src/data/aircraftClass.js"
+      "src/data/aircraftClass.js",
+      "src/data/provenance.js"
     ],
     "external": []
   },
@@ -2417,10 +2431,7 @@
   },
   "regional-source": {
     "exports": ["./sources/regional"],
-    "modules": [
-      "src/data/geo.js",
-      "src/data/regionalModel.js"
-    ],
+    "modules": ["src/data/geo.js", "src/data/regionalModel.js"],
     "external": []
   },
   "voice-action-schemas": {

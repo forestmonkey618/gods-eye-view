@@ -1,6 +1,6 @@
 # I3 DESIGN REDUCTION ADDENDUM — Provenance / Epistemic Typing
 
-**Status:** I3a IMPLEMENTED — minimal provenance primitive + aircraft position provenance. I3b IMPLEMENTED — aircraft current-field / sticky provenance (REPORTED + DERIVED + enrichment). Previous research phase closed.
+**Status:** I3a IMPLEMENTED — minimal provenance primitive + aircraft position provenance. I3b IMPLEMENTED — aircraft current-field / sticky provenance (REPORTED + DERIVED + enrichment). I3c IMPLEMENTED (2026-09-19, pending owner review) — military-store current-field provenance (`MilitaryFlightRecords.provenance`, `militaryFlightsLayer.getProvenanceMap()`, readsb `seen`/`seen_pos` timestamp semantics, db-backed identity `reportedAtMs null`) + civil lifecycle/suppression-sweep provenance cleanup; turnRateDps → no provenance (internal motion input); adsbdb cache → no fix (I5 owns age). See `I3c-IMPLEMENTATION-REPORT.md`. Previous research phase closed.
 **Date:** 2026-09-18 I3a slice + I3b slice. Evidence from actual checkout at `arena/01a0b2f3-gods-eye-view` traced server/providers/aircraft/opensky.js → API/route → X-Flight-Source handling → client src/sources/live/standalone.js → FlightRecords.receive() → getCurrentEntities() and enrichment callbacks.
 **Purpose:** Reduce speculative 7-class model to smallest correct substrate before owner approval, then implement minimal vertical slices truthfully.
 

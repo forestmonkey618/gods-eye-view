@@ -49,6 +49,10 @@ export function createMilitarySnapshotRenderer({
           modelOwnsVisual: aircraft.onGround
             ? rendering._modelOwnsVisual(icao24)
             : false,
+          // I3c: one source identity and one client receipt per batch — the
+          // snapshot adapter's stable machine id ('adsb.lol'), never a label.
+          sourceId: snapshot.sourceId || null,
+          receivedAtMs: snapshot.receivedAtMs || null,
         },
       );
       const position = Cesium.Cartesian3.fromDegrees(
