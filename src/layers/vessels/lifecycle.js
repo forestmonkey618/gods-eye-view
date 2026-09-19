@@ -121,6 +121,12 @@ export function createLifecycle({
     state.records.all = [];
     state.records.byMmsi = new Map();
     state.records.unkeyed = [];
+    // I3d: provenance sidecar follows store lifecycle — no descriptor outlives its record
+    if (state.records.provenance) {
+      state.records.provenance.clear();
+    } else {
+      state.records.provenance = new Map();
+    }
     state.clickHandler = null;
     state.keyTarget = null;
     state.keydownHandler = null;

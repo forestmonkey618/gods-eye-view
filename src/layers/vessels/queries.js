@@ -443,6 +443,56 @@ export function createQueries({
     },
 
     /**
+     * I3d — Current vessel field provenance sidecar — CURRENT only, per-field.
+     * Single authority: VesselRecords.provenance Map<mmsi, {field: descriptor}>.
+     *
+     * STORE-LOCAL accessor (not canonical): keyed by native mmsi string (trimmed),
+     * NOT entityKey. This mirrors flights/military which key by native icao24
+     * to include non-canonical (malformed) and to allow direct join with store's
+     * own data without reconstruction. Unkeyed (empty mmsi) has no stable key
+     * and is excluded from provenance — it is transient per refresh.
+     *
+     * Shape per vessel (sparse — only fields with current value have provenance):
+     * {
+     *   position: {epistemic:'reported', sourceId:'aisstream', reportedAtMs, receivedAtMs, via:null} // lat/lon
+     *   speed: REPORTED // knots, reportedAtMs = position time
+     *   course: REPORTED
+     *   heading: REPORTED
+     *   name: REPORTED // static, reportedAtMs null
+     *   imo: REPORTED
+     *   type: REPORTED
+     *   destination: REPORTED
+     * }
+     *
+     * - Position = lat/lon fix. reportedAtMs = last_position_epoch*1000 or parsed UTC, null when unavailable.
+     * - Speed/course/heading share same reportedAtMs (same PositionReport).
+     * - Static identity fields (name, imo, type, destination) have reportedAtMs null — server does not retain static report time.
+     * - SourceId always 'aisstream' — truthful single provider, per adapter.
+     * - receivedAtMs = client receipt time (VesselRecords.now() per batch).
+     * - CURRENT only: no history, no previous provenance arrays.
+     * - Copy-safe: fresh Map per call, fresh plain object per vessel, fresh copy per descriptor (frozen internally).
+     * - getCurrentEntities() remains unchanged and provenance-unaware (I2 primitive-only).
+     * - Unkeyed excluded, malformed included (native key present).
+     *
+     * @returns {Map<string, Object>} Map<mmsi, {field: provenance descriptor}>
+     */
+    getProvenanceMap() {
+      const fullMap = state.records.provenance;
+      if (!fullMap || fullMap.size === 0) return new Map();
+      const out = new Map();
+      for (const [mmsi, provObj] of fullMap) {
+        if (!provObj || typeof provObj !== 'object') continue;
+        const copy = {};
+        for (const [field, desc] of Object.entries(provObj)) {
+          if (!desc) continue;
+          copy[field] = { ...desc };
+        }
+        if (Object.keys(copy).length > 0) out.set(mmsi, copy);
+      }
+      return out;
+    },
+
+    /**
      * Snapshot the layer's in-memory vessel records as plain JSON-safe
      * objects for the analyst query engine. On-demand only (called at most
      * once per spoken query) — zero per-frame cost, no listeners, no caching.

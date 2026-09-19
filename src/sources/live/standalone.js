@@ -192,6 +192,7 @@ export function createAisStreamSource({
   fetchImpl = defaultFetch,
   apiUrl = '/api/ais-live',
   origin = () => globalThis.location?.origin || 'http://localhost',
+  now = () => Date.now(),
 } = {}) {
   return {
     label: 'AISStream',
@@ -216,7 +217,15 @@ export function createAisStreamSource({
         error.message = reasons[payload?.status] || error.message;
         throw error;
       }
-      return { ...vesselSnapshot(payload), status: response.status };
+      const receiptMs = now();
+      return {
+        ...vesselSnapshot(payload, {
+          sourceId: 'aisstream',
+          now: receiptMs,
+          receivedAtMs: receiptMs,
+        }),
+        status: response.status,
+      };
     },
     async getTrack(reference, { signal } = {}) {
       const { response, payload } = await readResponse(
