@@ -15,6 +15,7 @@ import {
   FOCUS_EVIDENCE_DEV,
   FLEET_DR_INTERVAL_MS,
 } from './policy.js';
+import { aircraft as aircraftEntityKey } from '../../data/entityKey.js';
 
 export function createQueries({
   flightState,
@@ -239,6 +240,9 @@ export function createQueries({
       // label, not a key — the engine keys on `icao24` below.
       id: callsign || text(info?.registration) || icao24,
       icao24,
+      // I2a canonical entity identity — same ICAO24 = same entityKey regardless
+      // of flights/military/OpenSky/adsb.lol. Layer/provider is observation, not identity.
+      entityKey: aircraftEntityKey(icao24),
       callsign,
       lat: num(info?.rawLat),
       lon: num(info?.rawLon),
@@ -717,6 +721,167 @@ export function createQueries({
         if (result.length >= limit) break;
       }
       return result;
+    },
+
+    /**
+     * I2b — Current aircraft entity accessor — uncapped, deterministic, side-effect free.
+     * Store-owned: returns current records owned by THIS layer's FlightRecords.data
+     * Map, NOT all canonical aircraft known to GEV globally. Suitable as future
+     * input to recordIndex, but recordIndex must know which store produced each
+     * array to reconcile overlap.
+     *
+     * Overlap lifecycle (traced from actual code):
+     * - Flights and military have INDEPENDENT FlightRecords instances.
+     * - Military snapshotRenderer registers currentIcaos via militaryRegistry.registerMilitaryIcaos()
+     *   at END of its poll; flights snapshotRenderer checks isMilitaryIcao() && _militaryLayerSuppresses()
+     *   at START of each observation in its poll. If true, flights forgets (immediate synchronous
+     *   delete from data Map, billboard, cullPositions, history, groundSnap, model) and does NOT
+     *   add to currentIcaos.
+     * - _militaryLayerSuppresses() returns false if !isMilitaryLayerActive(), or if icao is
+     *   currently tracked, or pendingTrackingRestore. Otherwise true.
+     * - On military activation transition, flights._onMilitaryActiveChange(true) immediately
+     *   deletes known-military billboards/data from flights store (not waiting for next poll).
+     * - On military deactivation, flights._onMilitaryActiveChange(false) triggers flightsLayer.update()
+     *   fire-and-forget, so flights will re-acquire after next OpenSky poll. Military disable
+     *   does NOT clear its own data Map (only hides collection, releases models, clears tracking,
+     *   sets active false). So during deactivation window, BOTH Maps can contain same ICAO24.
+     * - Also during race: military discovers new military ICAO in its poll, registers it,
+     *   but flights next poll hasn't run yet → both Maps contain same ICAO24 until flights forgets.
+     * - When military active and steady-state after both polled, same ICAO24 should NOT exist
+     *   in both Maps (flights suppressed). But during transitions, simultaneous existence possible.
+     * - Either store can contain older/newer payload for same ICAO24: each has independent
+     *   observedReceiptMs (Date.now() at receive) and feed cadence, not cross-comparable.
+     * - Visibility (billboardCollection.show) affects presentation, but data ownership affected
+     *   by isMilitaryLayerActive + isMilitaryIcao suppression (forget). Military inactive:
+     *   visibility false but data Map remains populated (stale) until evicted via missing-poll.
+     * - forget() is immediate synchronous delete.
+     *
+     * Therefore this accessor does NOT claim global aircraft authority. It is store-owned.
+     * Same ICAO24 → same canonical entityKey (I2a) does NOT mean payloads interchangeable.
+     * I2c must decide reconciliation; deterministic evidence for winner exists: isMilitaryIcao
+     * + isMilitaryLayerActive (military wins when active), but that is presentation-layer state,
+     *   not pure data. Timestamps observedReceiptMs exist but are not cross-provider comparable
+     *   without I3 provenance. No safe pure-data winner without I2c design decision.
+     *
+     * Coordinate authority: rawLat/rawLon from current record model — actual reported fix
+     * (pre-dead-reckon), not mutable Cesium billboard position.
+     * Altitude: barometric MSL aviation field (meters) — verified: OpenSky row[7] is meters baro,
+     *   readsb alt_baro feet *0.3048 → meters baro, stored as altitude meters in flights.
+     *   Not render height, not geometric. See src/sources/live/aircraft.js.
+     * Native identifier: field called `icao24` actually stores general aircraft identifier
+     * including TIS-B `~` — documented ambiguity, preserved as `icao24` for compatibility,
+     * with entityKey null for non-ICAO per I2a strict 6-hex.
+     *
+     * Record shape (minimum useful for future recordIndex):
+     * { entityKey: string|null, icao24: string, lat: number|null, lon: number|null,
+     *   altitudeM: number|null, callsign: string|null }
+     *
+     * - entityKey: canonical aircraft:icao24:<6-hex> or null for TIS-B/non-ICAO/malformed
+     * - icao24: native identifier as stored (e.g., abc123 or ~abc123), preserves ~ for TIS-B
+     * - lat/lon: from rawLat/rawLon (reported fix)
+     * - altitudeM: barometric MSL meters (aviation field) — same concept as military after conversion
+     * - callsign: trimmed or null
+     *
+     * Ordering: underlying Map insertion order (deterministic for same store state).
+     * Copy safety: fresh array per call, fresh plain object per record, primitives only.
+     * Performance: O(n) over current store (~11k), allocation per record but on-demand
+     * not per-frame, no sorting, no coordinate conversion, no Cesium.
+     *
+     * @returns {Array<{entityKey: string|null, icao24: string, lat: number|null, lon: number|null, altitudeM: number|null, callsign: string|null}>}
+     */
+    getCurrentEntities() {
+      if (!flightState.records.data || flightState.records.data.size === 0)
+        return [];
+      const result = [];
+      for (const [icao24, info] of flightState.records.data) {
+        const num = (v) => (Number.isFinite(v) ? v : null);
+        const text = (v) => {
+          const t = String(v ?? '').trim();
+          return t || null;
+        };
+        result.push({
+          entityKey: aircraftEntityKey(icao24),
+          icao24, // native identifier as stored — field called icao24 but actually general aircraft id including TIS-B ~ (documented ambiguity)
+          lat: num(info?.rawLat),
+          lon: num(info?.rawLon),
+          altitudeM: num(info?.altitude), // barometric/MSL meters — aviation field, not render height
+          callsign: text(info?.callsign),
+        });
+      }
+      return result;
+    },
+
+    /**
+     * I3b — Current aircraft field provenance sidecar — CURRENT only, per-field.
+     * Single authority: FlightRecords.provenance Map<icao24, {field: descriptor}>.
+     * (I3a positionProvenance removed after owner approval of I3b evolution — no compat wrapper needed.)
+     *
+     * STORE-LOCAL accessor (not canonical): keyed by native icao24 (lowercased hex, preserves ~ for TIS-B), NOT entityKey.
+     * This is deliberate: FlightRecords.data Map is keyed by native icao24 (the actual storage key,
+     * same as _billboards key, trackById resolution, Context cohorts). Provenance follows current values
+     * which are stored under native id. Using native key allows direct join with store's own data
+     * without reconstruction and includes TIS-B / noncanonical (entityKey:null) which still have
+     * positions that need provenance. Creating synthetic entityKeys for TIS-B would invent identity.
+     *
+     * Shape per aircraft (sparse — only fields with current value have provenance):
+     * {
+     *   position: {epistemic:'reported', sourceId, reportedAtMs, receivedAtMs, via:null} // rawLat/rawLon
+     *   altitude: REPORTED // baro
+     *   geoAltitudeM: REPORTED
+     *   velocity: REPORTED
+     *   true_track: REPORTED
+     *   verticalRate: REPORTED
+     *   callsign: REPORTED
+     *   originCountry: REPORTED
+     *   category: REPORTED
+     *   onGround: REPORTED
+     *   lastContactEpochMs: REPORTED
+     *   typeCode: REPORTED adsbdb
+     *   registration: REPORTED adsbdb
+     *   airline: REPORTED adsbdb
+     *   route: REPORTED adsbdb
+     *   typeName: REPORTED adsbdb
+     *   klass: {epistemic:'derived', via:'classification'}
+     *   wasAirborne: {epistemic:'derived', via:'airborne-history'}
+     *   renderAltitudeM: {epistemic:'derived', via:'render-altitude-selection'}
+     * }
+     *
+     * - Position = rawLat/rawLon/fix. Follows retained position. reportedAtMs = positionTimeMs per OpenSky docs (time_position for last position update, includes baro/geo/onGround).
+     * - Altitude (baro) = stickyNumber fallback 0/10000 synthetic -> no provenance when fallback. reportedAtMs = positionTimeMs (baro altitude part of position report per OpenSky).
+     * - geoAltitudeM = non-sticky, null when missing -> no provenance when null. reportedAtMs = positionTimeMs (geometric altitude part of position).
+     * - onGround = boolean always replacement, reportedAtMs = positionTimeMs (surface position report per OpenSky docs).
+     * - velocity/true_track/verticalRate/callsign/originCountry/category/lastContact = contactTimeMs (last_contact = last update in general, updated for any valid message, includes velocity/track/vertical_rate/callsign/category).
+     * - Derived fields always present with DERIVED via, no sourceId required.
+     * - TIS-B / noncanonical (entityKey:null) included, keyed by native id (e.g., '~abc123'), no synthetic keys.
+     * - CURRENT only: no history, no previous provenance arrays.
+     * - Copy-safe: fresh Map per call, fresh plain object per aircraft, fresh copy per descriptor (frozen internally).
+     * - getCurrentEntities() remains unchanged and provenance-unaware (I2 primitive-only).
+     *
+     * Breaking change from I3a: I3a returned Map<icao24, descriptor> (position directly). I3b returns
+     * Map<icao24, {position: descriptor, ...}>. Owner approved evolution, no compat wrapper needed.
+     *
+     * Future canonical consumer join path:
+     * - Call getCurrentEntities() which returns both {entityKey, icao24, ...} and use icao24 to lookup this Map.
+     * - Or derive native id via suffix = entityKey.slice('aircraft:icao24:'.length) for canonical.
+     * - Future canonical provenance projection (I3c+) will be adapter-level that filters canonical only
+     *   and re-keys by entityKey, omitting TIS-B.
+     *
+     * @returns {Map<string, Object>} Map<icao24, {field: provenance descriptor}>
+     */
+    getProvenanceMap() {
+      const fullMap = flightState.records.provenance;
+      if (!fullMap || fullMap.size === 0) return new Map();
+      const out = new Map();
+      for (const [icao24, provObj] of fullMap) {
+        if (!provObj || typeof provObj !== 'object') continue;
+        const copy = {};
+        for (const [field, desc] of Object.entries(provObj)) {
+          if (!desc) continue;
+          copy[field] = { ...desc };
+        }
+        if (Object.keys(copy).length > 0) out.set(icao24, copy);
+      }
+      return out;
     },
 
     /**

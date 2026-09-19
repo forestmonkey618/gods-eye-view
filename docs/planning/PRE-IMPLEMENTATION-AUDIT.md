@@ -8,6 +8,26 @@
 
 Verdicts are **FIX BEFORE** / **FIX WHEN REACHED** / **LEAVE ALONE**.
 
+### Addendum — 2026-09 ATAK-CIV study and I1 implementation
+
+This audit was written before I1 spatial authority was implemented and before the ATAK-CIV comparative study. Two updates are recorded here to prevent contradictions with `MASTER-PLAN.md` (see 0.4) and current code:
+
+- **I1 FIX BEFORE items (A1 ring containment, A2 scoped spatial authority, A8 spatial check) have been implemented:** `src/data/geo.js`, `geo.test.mjs`, `geoEllipsoid.js`, `geoid.js` now exist. `naturalEarthRegions.pointInRing` now delegates to `geo.ringContains` (antimeridian-correct). The confirmed bug in §A1 is fixed. `check-spatial-authority.mjs` (or equivalent) was part of that implementation. This audit's §A1/A2/A8 remain historically accurate as the rationale, but their status is now **DONE**, not still FIX BEFORE.
+
+- **ATAK accepted findings (2026-09) incorporated into MASTER-PLAN 0.4:**
+  - I7 expanded to User Spatial Objects + AOIs: general-purpose persistent geometry (point/pin, polygon, radial circle, corridor, bbox) serving multiple semantic roles (AOI scope, watch/geofence boundary, saved reference mark, investigation/workspace object, brief subject) without duplicating geometry. Ephemeral telestration vs persistent User Spatial Objects distinct (P12). Persistence mechanism NOT locked.
+  - P11 transient vs persistent lifecycles: high-volume feed state (live ADS-B, AIS, earthquakes) vs persistent user knowledge (saved spatial objects, AOIs, watchlists, investigation notes, workspace state). Lifecycle distinction, not storage tech. No longitudinal per-entity movement history.
+  - I9 expanded to edge-triggered state transitions: APPEARED, UPDATED, STALE, DEPARTED, ENTERED_SCOPE, EXITED_SCOPE (edge semantics, anti-flapping, prior-state ownership, thresholds, cadence interaction, division across I2/I3/I4/I5/I9). STALE as meaningful transition.
+  - I8 future selection-deconfliction requirement for dense scenes: compact candidate-selection when multiple entities overlap same click/touch area (identity/callsign/label, layer/domain, distance, bearing).
+  - I11/workspaces reproducible: workspace/brief should describe reproducible analytical context (spatial scope/User Spatial Objects, temporal/as-of, layers, sources, provenance, user knowledge, coverage/blind-spot, license) without adopting ATAK XML/CoT.
+  - Parametric sensor geometry (origin/azimuth/elevation/FOV/range) deferred to I4/I5 evaluation, I1 NOT reopened (D10).
+  - Concepts NOT adopted from ATAK listed in MASTER-PLAN 0.4.4.
+  - Corrections to ATAK report (0.4.5): do NOT assign observedAt/staleAt/accuracyM automatically to recordIndex, do NOT lock persistence, do NOT eliminate ephemeral annotations, do NOT treat ATAK as authoritative.
+
+- **D9 now RESOLVED (2026-09):** flights/military `getNearby` SURFACE vs SLANT due to ECEF center is now RESOLVED as DUAL SEMANTICS, SURFACE authoritative for geographic proximity. Owner decision: SURFACE authoritative for radius membership, cutoff, discovery, sorting, AOIs, watch/geofence, rosters, analyst/search "within X km", narration; SLANT = physical 3D separation, explicitly named secondary, must NEVER silently substitute for `distanceM`, must NOT alter geographic radius membership (example overhead: surface 0 km, slant ≈10.7 km at 35k ft). Whether slant is eagerly attached as `slantDistanceM`, lazily, or only by specialized 3D consumers is implementation detail deferred. Current code still uses `Cartesian3.distance` — DECISION resolved, IMPLEMENTATION pending. Vessels/installations NOT automatically mandated for migration by D9. This audit's original recommendation to migrate flights/military `getNearby` to surface-consistent is now superseded by resolved dual-semantics contract, to be implemented when I8 proximity contract is designed. See MASTER-PLAN Part 3.4 and D9.
+
+- **Sequencing preserved:** Step 0 → I1 (done) → I2/I3/I4/I5 → I6 → I7 (expanded) → I8 (+deconfliction) → I9 (+edge transitions) → I10/I11 (consume stronger foundations). See MASTER-PLAN 0.4.6.
+
 ---
 
 ## §A — Candidates that pass the rule

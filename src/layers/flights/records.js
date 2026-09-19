@@ -11,6 +11,7 @@ import {
   LANDED_MISSING_POLL_LIMIT,
   MISSING_POLL_LIMIT,
 } from './recordPolicy.js';
+import { EPISTEMIC, createProvenance } from '../../data/provenance.js';
 
 /** Source-independent aircraft metadata and bounded missing-poll retention. */
 export class FlightRecords {
@@ -24,11 +25,22 @@ export class FlightRecords {
     this.missingPolls = new Map();
     this.geoidNCache = new Map();
     this.geoidReady = false;
+    // I3b: full per-field provenance sidecar — Map<icao24, {field: descriptor}>
+    // Each field's provenance follows its current value (sticky retention retains old provenance).
+    // Copy-safe frozen descriptors. CURRENT only, no history. Single authority (positionProvenance removed after I3b approval).
+    this.provenance = new Map();
   }
 
   receive(
     observation,
-    { viewerLatDeg, viewerLonDeg, trackedId, floorWarmPoints },
+    {
+      viewerLatDeg,
+      viewerLonDeg,
+      trackedId,
+      floorWarmPoints,
+      sourceId,
+      receivedAtMs,
+    } = {},
   ) {
     const { geoidHeight, cachedGroundFloor, floorAltitudeM } = this.services;
     const {
@@ -53,6 +65,7 @@ export class FlightRecords {
     // regressing to the ICAO hex / a 0° (north) heading. Bounded by the
     // MISSING_POLL_LIMIT eviction below, which deletes the whole entry.
     const prevMeta = this.data.get(icao24);
+    const prevProv = this.provenance.get(icao24) || {};
     // Grounded planes with no baro reading sit at 0 m, not the 10 km
     // airborne default (a parked plane must never float).
     // NOTE (height-datum fix): `alt` stays the AVIATION field — the sticky
@@ -255,6 +268,184 @@ export class FlightRecords {
       observation.positionTimeMs > 0
         ? observation.positionTimeMs
         : Date.now();
+
+    // --- I3a+I3b provenance: CURRENT only, follows current value ---
+    // Helpers
+    const hasValidPosition =
+      Number.isFinite(lat) && Math.abs(lat) <= 90 && Number.isFinite(lon) && Math.abs(lon) <= 180;
+    const positionReportedAtMs =
+      Number.isFinite(observation.positionTimeMs) && observation.positionTimeMs > 0
+        ? observation.positionTimeMs
+        : null;
+    const contactReportedAtMs =
+      Number.isFinite(observation.contactTimeMs) && observation.contactTimeMs > 0
+        ? observation.contactTimeMs
+        : positionReportedAtMs; // fallback to position time if contact missing
+
+    function tryReported(sourceIdVal, reportedAtMsVal, receivedAtMsVal) {
+      if (!sourceIdVal || !Number.isFinite(receivedAtMsVal)) return null;
+      try {
+        return createProvenance({
+          epistemic: EPISTEMIC.REPORTED,
+          sourceId: sourceIdVal,
+          reportedAtMs: reportedAtMsVal,
+          receivedAtMs: receivedAtMsVal,
+        });
+      } catch {
+        return null;
+      }
+    }
+    function tryDerived(via) {
+      try {
+        return createProvenance({
+          epistemic: EPISTEMIC.DERIVED,
+          via,
+        });
+      } catch {
+        return null;
+      }
+    }
+
+    const newProv = { ...prevProv };
+
+    // Position — always replacement when valid position present
+    if (hasValidPosition) {
+      const prov = tryReported(sourceId, positionReportedAtMs, receivedAtMs);
+      if (prov) {
+        newProv.position = prov;
+      } else {
+        delete newProv.position;
+      }
+    }
+    // else retain previous position provenance (do not overwrite)
+
+    // Helper to handle stickyNumber fields with fallback synthetic detection
+    function handleStickyNumber(fieldName, nextVal, prevVal, fallbackVal, reportedAtMsVal) {
+      const nextFinite = Number.isFinite(nextVal);
+      const prevFinite = Number.isFinite(prevVal);
+      if (nextFinite) {
+        // replacement
+        const prov = tryReported(sourceId, reportedAtMsVal, receivedAtMs);
+        if (prov) newProv[fieldName] = prov;
+        else {
+          // If no source info, remove old provenance to avoid stale
+          if (sourceId == null && receivedAtMs == null) delete newProv[fieldName];
+          else delete newProv[fieldName];
+        }
+      } else if (prevFinite) {
+        // retention — keep old provenance (do nothing, already in newProv via spread)
+        // Ensure it exists, else leave absent
+      } else {
+        // fallback or null — no provenance (synthetic or absent)
+        delete newProv[fieldName];
+      }
+    }
+
+    function handleStickyText(fieldName, nextVal, prevVal, reportedAtMsVal) {
+      const nextClean = String(nextVal || '').trim();
+      const prevClean = String(prevVal || '').trim();
+      if (nextClean) {
+        const prov = tryReported(sourceId, reportedAtMsVal, receivedAtMs);
+        if (prov) newProv[fieldName] = prov;
+        else delete newProv[fieldName];
+      } else if (prevClean) {
+        // retention — keep old
+      } else {
+        delete newProv[fieldName];
+      }
+    }
+
+    // altitude (baro) — REPORTED when finite, position time
+    // Distinguish synthetic fallback: if both next and prev not finite, it's fallback 0/10000 -> no provenance
+    {
+      const nextFinite = Number.isFinite(baro_alt);
+      const prevFinite = Number.isFinite(prevMeta?.altitude);
+      if (nextFinite) {
+        const prov = tryReported(sourceId, positionReportedAtMs, receivedAtMs);
+        if (prov) newProv.altitude = prov;
+        else delete newProv.altitude;
+      } else if (prevFinite) {
+        // retain old provenance (already spread)
+        // But if prev was fallback synthetic (no provenance), keep absent
+      } else {
+        delete newProv.altitude;
+      }
+    }
+
+    // geoAltitudeM — non-sticky, null when missing
+    {
+      if (Number.isFinite(geo_alt)) {
+        const prov = tryReported(sourceId, positionReportedAtMs, receivedAtMs);
+        if (prov) newProv.geoAltitudeM = prov;
+        else delete newProv.geoAltitudeM;
+      } else {
+        delete newProv.geoAltitudeM;
+      }
+    }
+
+    // velocity — stickyNumber fallback 0 synthetic
+    handleStickyNumber('velocity', velocity, prevMeta?.velocity, 0, contactReportedAtMs);
+    // true_track
+    handleStickyNumber('true_track', true_track, prevMeta?.true_track, 0, contactReportedAtMs);
+    // verticalRate — fallback null
+    handleStickyNumber('verticalRate', vertical_rate, prevMeta?.verticalRate, null, contactReportedAtMs);
+    // category — fallback null
+    handleStickyNumber('category', category, prevMeta?.category, null, contactReportedAtMs);
+    // lastContactEpochMs — stickyNumber null, value is contactTimeMs itself
+    handleStickyNumber('lastContactEpochMs', observation.contactTimeMs, prevMeta?.lastContactEpochMs, null, contactReportedAtMs);
+
+    // callsign — stickyText
+    handleStickyText('callsign', callsign, prevMeta?.callsign, contactReportedAtMs);
+    // originCountry — stickyText || null
+    handleStickyText('originCountry', origin_country, prevMeta?.originCountry, contactReportedAtMs);
+
+    // onGround — always replacement, boolean
+    {
+      const prov = tryReported(sourceId, positionReportedAtMs, receivedAtMs);
+      if (prov) newProv.onGround = prov;
+      else {
+        // If no source info but we have new onGround value, remove old to avoid stale? For legacy tests without source, delete.
+        if (sourceId == null && receivedAtMs == null) {
+          // legacy: if we never had provenance, leave absent; if we had, keep? Actually new onGround with no source -> remove old to avoid lying
+          const had = prevProv.onGround;
+          if (had) delete newProv.onGround;
+        } else {
+          delete newProv.onGround;
+        }
+      }
+    }
+
+    // DERIVED fields — always present, via only
+    // klass: classification from typeCode+category
+    {
+      const prov = tryDerived('classification');
+      if (prov) newProv.klass = prov;
+    }
+    // wasAirborne: airborne-history
+    {
+      const prov = tryDerived('airborne-history');
+      if (prov) newProv.wasAirborne = prov;
+    }
+    // renderAltitudeM: render-altitude-selection (includes ground-floor clamp)
+    {
+      const prov = tryDerived('render-altitude-selection');
+      if (prov) newProv.renderAltitudeM = prov;
+    }
+
+    // Enrichment fields: typeCode, registration, etc are retained via prevMeta but their provenance
+    // is managed by enrichment callbacks (see enrichment.js). Here we retain existing enrichment
+    // provenance from prevProv if present, unless enrichment callback overwrote it.
+    // Since receive() does not set enrichment values, we just keep whatever prev provenance had
+    // for enrichment fields (already spread). No new provenance created here.
+
+    // Prune empty? Keep at least position etc.
+    // If newProv has no keys, delete map entry to keep sparse.
+    if (Object.keys(newProv).length === 0) {
+      this.provenance.delete(icao24);
+    } else {
+      this.provenance.set(icao24, newProv);
+    }
+
     return { icao24, prevMeta, meta, groundFlipped, fixEpochMs };
   }
 
@@ -279,5 +470,6 @@ export class FlightRecords {
     this.data.delete(id);
     this.missingPolls.delete(id);
     this.geoidNCache.delete(id);
+    this.provenance.delete(id);
   }
 }

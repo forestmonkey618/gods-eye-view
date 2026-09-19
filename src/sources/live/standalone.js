@@ -69,13 +69,32 @@ export function createOpenSkySource({
         'OpenSky',
       );
       if (!response.ok) throw openSkyError(response);
+      const flightSourceHeader = header(response, 'x-flight-source');
+      const sourceLabel = flightSourceHeader || 'OpenSky Network';
+      // I3a: stable machine sourceId — truthful mapping per server route invariant:
+      // server/providers/aircraft/opensky.js: openSkyProxy primary path does NOT set X-Flight-Source (only X-OpenSky-*),
+      // every successful fallback path via serveAdsbLolPointFallback explicitly sets X-Flight-Source: adsb.lol.
+      // Therefore absence of header logically proves OpenSky (route structure, not guess). No other provider flows through this route.
+      // Unexpected future value: use header value truthfully as sourceId (lowercased) if valid, do not fabricate opensky.
+      const rawHeader = flightSourceHeader ? String(flightSourceHeader).trim() : '';
+      let sourceId;
+      if (!rawHeader) {
+        sourceId = 'opensky'; // proven invariant: primary path, no header
+      } else if (rawHeader.toLowerCase().includes('adsb')) {
+        sourceId = 'adsb.lol';
+      } else {
+        sourceId = rawHeader.toLowerCase(); // future provider — truthful, not guessed
+      }
+      const receiptMs = now();
       return {
         ...openSkySnapshot(payload, {
-          source: header(response, 'x-flight-source') || 'OpenSky Network',
+          source: sourceLabel,
+          sourceId,
           coverage:
             header(response, 'x-flight-coverage') ||
             'worldwide upstream snapshot',
-          now: now(),
+          now: receiptMs,
+          receivedAtMs: receiptMs,
         }),
         status: response.status,
       };
@@ -133,10 +152,14 @@ export function createAdsbLolSource({
       );
       if (!response.ok) throw httpError(response, 'adsb.lol');
       const age = finite(header(response, 'x-ads-b-cache-age-ms'));
+      const receiptMs = now();
+      const observedAtMs = receiptMs - (age != null && age > 0 ? age : 0);
       return {
         ...readsbSnapshot(payload, {
-          observedAtMs: now() - (age != null && age > 0 ? age : 0),
-          now: now(),
+          observedAtMs,
+          sourceId: 'adsb.lol',
+          now: receiptMs,
+          receivedAtMs: receiptMs,
           stale: header(response, 'x-ads-b-cache') === 'STALE',
         }),
         status: response.status,
