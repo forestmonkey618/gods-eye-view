@@ -825,7 +825,8 @@
       "src/layers/vessels/recordPolicy.js",
       "src/layers/vessels/snapshotRenderer.js",
       "src/data/inputOwnership.js",
-      "src/data/entityKey.js"
+      "src/data/entityKey.js",
+      "src/data/provenance.js"
     ],
     "external": ["cesium"]
   },
@@ -2402,7 +2403,8 @@
     "exports": ["./layers/vessels/records"],
     "modules": [
       "src/layers/vessels/records.js",
-      "src/layers/vessels/recordPolicy.js"
+      "src/layers/vessels/recordPolicy.js",
+      "src/data/provenance.js"
     ],
     "external": []
   },

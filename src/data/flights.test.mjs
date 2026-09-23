@@ -59,6 +59,7 @@ test('flights analyst record: full record maps every contract field', () => {
   assert.deepEqual(r, {
     id: 'SWA696',
     icao24: 'a1b2c3',
+    entityKey: 'aircraft:icao24:a1b2c3',
     callsign: 'SWA696',
     lat: 30.1945,
     lon: -97.6699,

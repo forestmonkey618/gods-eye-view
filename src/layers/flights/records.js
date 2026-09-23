@@ -272,13 +272,18 @@ export class FlightRecords {
     // --- I3a+I3b provenance: CURRENT only, follows current value ---
     // Helpers
     const hasValidPosition =
-      Number.isFinite(lat) && Math.abs(lat) <= 90 && Number.isFinite(lon) && Math.abs(lon) <= 180;
+      Number.isFinite(lat) &&
+      Math.abs(lat) <= 90 &&
+      Number.isFinite(lon) &&
+      Math.abs(lon) <= 180;
     const positionReportedAtMs =
-      Number.isFinite(observation.positionTimeMs) && observation.positionTimeMs > 0
+      Number.isFinite(observation.positionTimeMs) &&
+      observation.positionTimeMs > 0
         ? observation.positionTimeMs
         : null;
     const contactReportedAtMs =
-      Number.isFinite(observation.contactTimeMs) && observation.contactTimeMs > 0
+      Number.isFinite(observation.contactTimeMs) &&
+      observation.contactTimeMs > 0
         ? observation.contactTimeMs
         : positionReportedAtMs; // fallback to position time if contact missing
 
@@ -320,7 +325,13 @@ export class FlightRecords {
     // else retain previous position provenance (do not overwrite)
 
     // Helper to handle stickyNumber fields with fallback synthetic detection
-    function handleStickyNumber(fieldName, nextVal, prevVal, fallbackVal, reportedAtMsVal) {
+    function handleStickyNumber(
+      fieldName,
+      nextVal,
+      prevVal,
+      fallbackVal,
+      reportedAtMsVal,
+    ) {
       const nextFinite = Number.isFinite(nextVal);
       const prevFinite = Number.isFinite(prevVal);
       if (nextFinite) {
@@ -329,7 +340,8 @@ export class FlightRecords {
         if (prov) newProv[fieldName] = prov;
         else {
           // If no source info, remove old provenance to avoid stale
-          if (sourceId == null && receivedAtMs == null) delete newProv[fieldName];
+          if (sourceId == null && receivedAtMs == null)
+            delete newProv[fieldName];
           else delete newProv[fieldName];
         }
       } else if (prevFinite) {
@@ -384,20 +396,60 @@ export class FlightRecords {
     }
 
     // velocity — stickyNumber fallback 0 synthetic
-    handleStickyNumber('velocity', velocity, prevMeta?.velocity, 0, contactReportedAtMs);
+    handleStickyNumber(
+      'velocity',
+      velocity,
+      prevMeta?.velocity,
+      0,
+      contactReportedAtMs,
+    );
     // true_track
-    handleStickyNumber('true_track', true_track, prevMeta?.true_track, 0, contactReportedAtMs);
+    handleStickyNumber(
+      'true_track',
+      true_track,
+      prevMeta?.true_track,
+      0,
+      contactReportedAtMs,
+    );
     // verticalRate — fallback null
-    handleStickyNumber('verticalRate', vertical_rate, prevMeta?.verticalRate, null, contactReportedAtMs);
+    handleStickyNumber(
+      'verticalRate',
+      vertical_rate,
+      prevMeta?.verticalRate,
+      null,
+      contactReportedAtMs,
+    );
     // category — fallback null
-    handleStickyNumber('category', category, prevMeta?.category, null, contactReportedAtMs);
+    handleStickyNumber(
+      'category',
+      category,
+      prevMeta?.category,
+      null,
+      contactReportedAtMs,
+    );
     // lastContactEpochMs — stickyNumber null, value is contactTimeMs itself
-    handleStickyNumber('lastContactEpochMs', observation.contactTimeMs, prevMeta?.lastContactEpochMs, null, contactReportedAtMs);
+    handleStickyNumber(
+      'lastContactEpochMs',
+      observation.contactTimeMs,
+      prevMeta?.lastContactEpochMs,
+      null,
+      contactReportedAtMs,
+    );
 
     // callsign — stickyText
-    handleStickyText('callsign', callsign, prevMeta?.callsign, contactReportedAtMs);
+    handleStickyText(
+      'callsign',
+      callsign,
+      prevMeta?.callsign,
+      contactReportedAtMs,
+    );
     // originCountry — stickyText || null
-    handleStickyText('originCountry', origin_country, prevMeta?.originCountry, contactReportedAtMs);
+    handleStickyText(
+      'originCountry',
+      origin_country,
+      prevMeta?.originCountry,
+      contactReportedAtMs,
+    );
 
     // onGround — always replacement, boolean
     {

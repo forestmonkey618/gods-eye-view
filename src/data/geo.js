@@ -208,7 +208,6 @@ export function distanceBetween(a, b, options = {}) {
   });
 }
 
-
 /**
  * Initial bearing from point 1 to point 2, degrees clockwise from north.
  * @returns {number} Degrees in [0, 360).
@@ -218,7 +217,8 @@ export function bearingDeg(lat1, lon1, lat2, lon2) {
   const p2 = lat2 * D2R;
   const dl = (lon2 - lon1) * D2R;
   const y = Math.sin(dl) * Math.cos(p2);
-  const x = Math.cos(p1) * Math.sin(p2) - Math.sin(p1) * Math.cos(p2) * Math.cos(dl);
+  const x =
+    Math.cos(p1) * Math.sin(p2) - Math.sin(p1) * Math.cos(p2) * Math.cos(dl);
   return (Math.atan2(y, x) / D2R + 360) % 360;
 }
 
@@ -323,7 +323,9 @@ export function nearbyM(items, reference, radiusM, options = {}) {
     out.push({ item, distanceM: d });
   }
   out.sort((a, b) => a.distanceM - b.distanceM);
-  return Number.isFinite(cap) ? out.slice(0, Math.max(0, Math.floor(cap))) : out;
+  return Number.isFinite(cap)
+    ? out.slice(0, Math.max(0, Math.floor(cap)))
+    : out;
 }
 
 /* ────────────────────────── ring containment ────────────────────────── */

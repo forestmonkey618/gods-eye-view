@@ -76,7 +76,9 @@ export function createOpenSkySource({
       // every successful fallback path via serveAdsbLolPointFallback explicitly sets X-Flight-Source: adsb.lol.
       // Therefore absence of header logically proves OpenSky (route structure, not guess). No other provider flows through this route.
       // Unexpected future value: use header value truthfully as sourceId (lowercased) if valid, do not fabricate opensky.
-      const rawHeader = flightSourceHeader ? String(flightSourceHeader).trim() : '';
+      const rawHeader = flightSourceHeader
+        ? String(flightSourceHeader).trim()
+        : '';
       let sourceId;
       if (!rawHeader) {
         sourceId = 'opensky'; // proven invariant: primary path, no header

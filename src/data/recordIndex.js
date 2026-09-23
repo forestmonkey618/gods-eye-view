@@ -147,7 +147,9 @@ export function buildRecordIndex(collections) {
     if (!collection || typeof collection !== 'object') continue;
     const storeId = collection.storeId;
     if (!VALID_STORE_IDS.has(storeId)) {
-      throw new TypeError(`Invalid storeId: ${String(storeId)} — expected flights or military`);
+      throw new TypeError(
+        `Invalid storeId: ${String(storeId)} — expected flights or military`,
+      );
     }
     const records = collection.records;
     if (!Array.isArray(records)) continue;
@@ -178,7 +180,9 @@ export function buildRecordIndex(collections) {
   function getEntryCopy(entityKey) {
     const entry = internal.get(entityKey);
     if (!entry) return undefined;
-    const sortedStores = [...entry.byStore.entries()].sort((a, b) => a[0].localeCompare(b[0]));
+    const sortedStores = [...entry.byStore.entries()].sort((a, b) =>
+      a[0].localeCompare(b[0]),
+    );
     const records = sortedStores.map(([storeId, rec]) => ({
       storeId,
       record: copyRecord(rec),
