@@ -1,5 +1,18 @@
 # God's Eye View Current State
 
+The canonical record index now has a production adapter.
+`buildCurrentRecordIndex` (`src/data/currentRecordIndex.js`) rebuilds it on
+demand from the Flights, Military Flights and AIS Vessels stores whose layers
+are settled ON (`enabled`, `lifecycleState` `enabled`, not uncertain). Disabled,
+disabling and re-enabling stores keep their caches but contribute nothing.
+Records keep the `entityKey` their store assigned; unkeyed records stay out. One
+aircraft held by both flight stores is one entity with a record per store. There
+is no cache, history or departure inference, and no Cesium or visibility input.
+`get_current_view_state` is the first consumer: each tracked aircraft and the
+selected vessel in `tracked` carries `canonical: {entityKey, storeIds,
+eligibleStoreIds}`, or `null` when no attribution is available. `null` is not a
+departure. The index is built only when such a contact exists.
+
 Vessel snapshot completeness is separate from freshness. A current snapshot with
 rejected or duplicate records shows PARTIAL with accepted/received counts; stale
 or unknown freshness and transport failures retain their warnings. Partial
@@ -3390,6 +3403,7 @@ silently demoting every later lookup for the session.
   2. **Contacts OFF** → "nearby" means **in view**; "near \<place\>" means a radius around that place. A radius query with Contacts active and no explicit centre is centred on the **active contact**, not the camera.
   3. **Every count names its scope in words** — "42 in your window", "8 in view", "about 30 within 250 km of Austin" — never a bare number. `analyst_query` returns `scopeLabel` so this is mechanical. Two different numbers with named scopes are not a contradiction.
   4. **The loaded-data caveat is stated once when relevant**: counts cover loaded data, and the flights layer loads where you look (appended to `coverage.note` for radius/view scopes over viewport-loaded layers).
+- **Tracked-contact identity** (`get_current_view_state.tracked[].canonical`) comes from the canonical record index adapter described at the top of this file — identity attribution only, not a count, and `null` never means departed.
 - **Degradation**: without `OPENAI_API_KEY`, `/api/realtime/token` returns 503 and the mic button surfaces the error; the rest of the app is unaffected.
 
 ### AI HUD Summary (June 2026)

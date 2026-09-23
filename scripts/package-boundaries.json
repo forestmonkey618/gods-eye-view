@@ -1829,7 +1829,9 @@
       "src/ui/sceneSharing.js",
       "src/data/entityKey.js",
       "src/layers/flights/enrichmentCore.js",
-      "src/data/provenance.js"
+      "src/data/provenance.js",
+      "src/data/currentRecordIndex.js",
+      "src/data/recordIndex.js"
     ],
     "external": [
       "@mapbox/vector-tile",
