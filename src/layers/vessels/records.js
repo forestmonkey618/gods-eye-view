@@ -36,7 +36,10 @@ function finiteNumber(value) {
 const VESSEL_SOURCE_ID = 'aisstream';
 
 function vesselReportedAtMs(record) {
-  if (Number.isFinite(record.lastPositionEpoch) && record.lastPositionEpoch > 0) {
+  if (
+    Number.isFinite(record.lastPositionEpoch) &&
+    record.lastPositionEpoch > 0
+  ) {
     const ms = record.lastPositionEpoch * 1000;
     return ms > 0 ? ms : null;
   }

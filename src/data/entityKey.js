@@ -118,7 +118,9 @@ export function vessel(mmsi) {
  */
 export function isValid(key) {
   if (typeof key !== 'string') return false;
-  if (key.startsWith(`${DOMAIN_AIRCRAFT}${SEPARATOR}${KIND_ICAO24}${SEPARATOR}`)) {
+  if (
+    key.startsWith(`${DOMAIN_AIRCRAFT}${SEPARATOR}${KIND_ICAO24}${SEPARATOR}`)
+  ) {
     const suffix = key.slice(
       `${DOMAIN_AIRCRAFT}${SEPARATOR}${KIND_ICAO24}${SEPARATOR}`.length,
     );

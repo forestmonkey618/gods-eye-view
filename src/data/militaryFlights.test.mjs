@@ -55,6 +55,7 @@ test('military analyst record: full record maps every contract field', () => {
   assert.deepEqual(r, {
     id: 'RCH451',
     icao24: 'ae01ce',
+    entityKey: 'aircraft:icao24:ae01ce',
     callsign: 'RCH451',
     lat: 31.05,
     lon: -97.03,

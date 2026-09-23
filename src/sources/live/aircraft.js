@@ -98,7 +98,8 @@ export function openSkySnapshot(
   let resolvedSourceId = sourceId;
   if (!resolvedSourceId) {
     const label = String(source || '').toLowerCase();
-    if (label.includes('adsb.lol') || label.includes('adsb')) resolvedSourceId = 'adsb.lol';
+    if (label.includes('adsb.lol') || label.includes('adsb'))
+      resolvedSourceId = 'adsb.lol';
     else if (label.includes('opensky')) resolvedSourceId = 'opensky';
     else resolvedSourceId = null;
   }

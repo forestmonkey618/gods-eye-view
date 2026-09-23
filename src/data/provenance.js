@@ -42,11 +42,13 @@ function validateSourceId(sourceId, { required = false } = {}) {
     if (required) throw new TypeError('sourceId is required for REPORTED');
     return null;
   }
-  if (typeof sourceId !== 'string') throw new TypeError('sourceId must be string');
+  if (typeof sourceId !== 'string')
+    throw new TypeError('sourceId must be string');
   const trimmed = sourceId.trim();
   if (!trimmed) throw new TypeError('sourceId cannot be empty');
   if (trimmed.length > 128) throw new TypeError('sourceId too long');
-  if (/\s/.test(trimmed)) throw new TypeError('sourceId must not contain whitespace');
+  if (/\s/.test(trimmed))
+    throw new TypeError('sourceId must not contain whitespace');
   // Very small syntax rule — lower-case recommended but not strictly enforced to avoid rejecting future sources;
   // however we require at least one alphanumeric and only allow a-z0-9._-:
   if (!/^[a-z0-9._:-]+$/.test(trimmed)) {
@@ -59,7 +61,8 @@ function validateSourceId(sourceId, { required = false } = {}) {
 
 function validateReportedAtMs(value) {
   if (value == null) return null;
-  if (!isFinitePositiveMs(value)) throw new TypeError('reportedAtMs must be finite positive ms or null');
+  if (!isFinitePositiveMs(value))
+    throw new TypeError('reportedAtMs must be finite positive ms or null');
   return value;
 }
 
@@ -68,7 +71,8 @@ function validateReceivedAtMs(value, { required = false } = {}) {
     if (required) throw new TypeError('receivedAtMs is required for REPORTED');
     return null;
   }
-  if (!isFinitePositiveMs(value)) throw new TypeError('receivedAtMs must be finite positive ms');
+  if (!isFinitePositiveMs(value))
+    throw new TypeError('receivedAtMs must be finite positive ms');
   return value;
 }
 
@@ -81,7 +85,8 @@ function validateVia(via, { required = false } = {}) {
   const trimmed = via.trim();
   if (!trimmed) throw new TypeError('via cannot be empty');
   if (trimmed.length > 64) throw new TypeError('via too long');
-  if (/\s/.test(trimmed)) throw new TypeError('via must not contain whitespace');
+  if (/\s/.test(trimmed))
+    throw new TypeError('via must not contain whitespace');
   if (!/^[a-z0-9._:-]+$/.test(trimmed)) {
     throw new TypeError(`via has invalid characters: ${trimmed}`);
   }
@@ -102,16 +107,26 @@ function validateVia(via, { required = false } = {}) {
  * @param {string} [params.via] - stable operation id for DERIVED (e.g. 'classification'), optional for REPORTED
  * @returns {Object} frozen descriptor {epistemic, sourceId, reportedAtMs, receivedAtMs, via}
  */
-export function createProvenance({ epistemic, sourceId, reportedAtMs, receivedAtMs, via } = {}) {
-  if (!epistemic || typeof epistemic !== 'string') throw new TypeError('epistemic is required');
-  if (!EPISTEMIC_VALUES.has(epistemic)) throw new TypeError(`unsupported epistemic: ${epistemic}`);
+export function createProvenance({
+  epistemic,
+  sourceId,
+  reportedAtMs,
+  receivedAtMs,
+  via,
+} = {}) {
+  if (!epistemic || typeof epistemic !== 'string')
+    throw new TypeError('epistemic is required');
+  if (!EPISTEMIC_VALUES.has(epistemic))
+    throw new TypeError(`unsupported epistemic: ${epistemic}`);
 
   const isReported = epistemic === EPISTEMIC.REPORTED;
   const isDerived = epistemic === EPISTEMIC.DERIVED;
 
   const validSourceId = validateSourceId(sourceId, { required: isReported });
   const validReportedAtMs = validateReportedAtMs(reportedAtMs);
-  const validReceivedAtMs = validateReceivedAtMs(receivedAtMs, { required: isReported });
+  const validReceivedAtMs = validateReceivedAtMs(receivedAtMs, {
+    required: isReported,
+  });
   const validVia = validateVia(via, { required: isDerived });
 
   // No implicit age/fresh/stale/confidence/history/observationId
@@ -137,13 +152,28 @@ export function isValidProvenance(value) {
   try {
     validateSourceId(sourceId, { required: epistemic === EPISTEMIC.REPORTED });
     validateReportedAtMs(reportedAtMs);
-    validateReceivedAtMs(receivedAtMs, { required: epistemic === EPISTEMIC.REPORTED });
+    validateReceivedAtMs(receivedAtMs, {
+      required: epistemic === EPISTEMIC.REPORTED,
+    });
     validateVia(via, { required: epistemic === EPISTEMIC.DERIVED });
   } catch {
     return false;
   }
   // Ensure no forbidden fields present (ageMs, fresh, stale, confidence, history, observationId)
-  const forbidden = ['ageMs', 'fresh', 'stale', 'confidence', 'quality', 'history', 'observationId', 'age', 'providerLabel', 'license', 'url', 'storeId'];
+  const forbidden = [
+    'ageMs',
+    'fresh',
+    'stale',
+    'confidence',
+    'quality',
+    'history',
+    'observationId',
+    'age',
+    'providerLabel',
+    'license',
+    'url',
+    'storeId',
+  ];
   for (const key of forbidden) {
     if (key in value) return false;
   }

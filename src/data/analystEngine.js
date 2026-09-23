@@ -64,7 +64,6 @@ export const ANALYST_LAYERS = {
   },
 };
 
-
 /** Great-circle distance in km. */
 /**
  * Great-circle distance in km, `(lat, lon)` order.
