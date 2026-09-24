@@ -1,5 +1,29 @@
 # God's Eye View Current State
 
+Provenance has one normalization/validation authority, `src/data/provenance.js`
+(I3a). A descriptor is a frozen five-key record — `epistemic`
+(`reported`/`derived`/`modeled`/`interpreted`), `sourceId` (stable machine id
+of the external origin, never the storeId), `reportedAtMs` (the source's own
+report time for that value, or `null` when the source supplied none — never
+filled from the wall clock or receipt time), `receivedAtMs` (GEV client
+receipt), and `via` (the named operation for derived values). Unknown remains
+unknown: a missing fact is `null` or absent, and no provider, confidence, age,
+history or event is inferred from fields that do not establish it. The
+Flights, Military Flights and AIS Vessels stores own per-field,
+current-state-only provenance sidecars that follow the current value —
+replacement moves the descriptor, sticky retention keeps the original,
+synthetic fallbacks carry none — exposed through each layer's copy-safe
+`getProvenanceMap()`. `getCurrentEntities()`, the record index and entity
+identity remain unchanged and provenance-unaware; freshness stays in feed
+state; rendering visibility has no effect. OpenSky supplies position and
+contact times; the adsb.lol fallback is labeled by `X-Flight-Source`;
+adsb.lol military rows supply `seen`/`seen_pos` ages and database attributes
+with no event time; AISStream supplies one position timestamp and no
+static-message time; adsbdb enrichment carries no report time. See
+[PROVENANCE.md](PROVENANCE.md) for exact field semantics, per-feed facts and
+known gaps; `scripts/check-provenance-authority.mjs` (in `check:boundaries`)
+freezes the authority boundaries.
+
 The canonical record index now has a production adapter.
 `buildCurrentRecordIndex` (`src/data/currentRecordIndex.js`) rebuilds it on
 demand from the Flights, Military Flights and AIS Vessels stores whose layers

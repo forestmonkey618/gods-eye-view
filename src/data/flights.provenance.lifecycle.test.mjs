@@ -228,6 +228,67 @@ test('the civil absence sweep forgets the record and its descriptors together (s
   }
 });
 
+test('rendering visibility has no effect on provenance', async (t) => {
+  const viewer = { camera: { positionCartographic: null }, scene: {} };
+  const billboard = {
+    position: Cesium.Cartesian3.fromDegrees(-97.6, 30.3, 10_668),
+    color: Cesium.Color.WHITE,
+    show: true,
+  };
+  const billboardCollection = { show: true, remove() {} };
+  _setTrackedFlightRefreshStateForTest({
+    icao24: ICAO,
+    entity: null,
+    tracked: false,
+    billboard,
+    billboardCollection,
+    viewer,
+    history: [],
+    meta: {
+      callsign: 'RCH123',
+      altitude: 10_668,
+      renderAltitudeM: 10_700,
+      velocity: 250,
+      true_track: 95,
+      klass: 'airliner',
+      onGround: false,
+      wasAirborne: true,
+      turnRateDps: 0,
+      rawLat: 30.3,
+      rawLon: -97.6,
+    },
+  });
+  const nowSec = Math.floor(Date.now() / 1000);
+  const snapshot = (map) =>
+    JSON.stringify([...map.entries()].sort((a, b) => a[0].localeCompare(b[0])));
+
+  mockOpenSky(t, nowSec);
+  await flightsLayer.update(viewer);
+  const visible = snapshot(flightsLayer.getProvenanceMap());
+  assert.ok(visible.includes(ICAO), 'descriptor present while rendered');
+
+  // Hide every rendering surface the layer owns; provenance is a data sidecar
+  // and must be byte-identical — no descriptor may depend on billboard.show,
+  // the collection's show, or any other scene state.
+  billboard.show = false;
+  billboardCollection.show = false;
+  assert.equal(
+    snapshot(flightsLayer.getProvenanceMap()),
+    visible,
+    'toggling rendering visibility changes nothing',
+  );
+
+  // A poll ingested while everything is hidden still records provenance —
+  // ingestion is not gated on visibility, and hidden records stay attributable.
+  mockOpenSky(t, nowSec + 30);
+  await flightsLayer.update(viewer);
+  const hiddenPoll = flightsLayer.getProvenanceMap().get(ICAO);
+  assert.ok(hiddenPoll?.position, 'descriptor recorded while rendering is hidden');
+  assert.equal(hiddenPoll.position.sourceId, 'opensky');
+  assert.equal(hiddenPoll.position.reportedAtMs > 0, true);
+  assertNoOrphans();
+});
+
 test('real civil init() → poll → destroy() lifecycle: init resets the sidecar with the store, and nothing survives destroy', async (t) => {
   withDom(t);
   const viewer = lifecycleViewer();

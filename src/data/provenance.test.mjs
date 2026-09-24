@@ -196,3 +196,67 @@ test('provenance primitive: isValidProvenance helper', () => {
   assert.equal(isValidProvenance({ epistemic: 'observed', sourceId: 'opensky', receivedAtMs: 2 }), false);
   assert.equal(isValidProvenance(null), false);
 });
+
+// I3a finalization — malformed OPTIONAL metadata must be rejected at the
+// authority, not coerced into a descriptor by a consumer. A future adapter
+// that passes an ISO string, an epoch in seconds, or a negative value must
+// fail loudly here, never become authoritative provenance downstream.
+test('provenance primitive: malformed optional metadata cannot become authoritative', () => {
+  const badReported = [
+    '2024-01-01T00:00:00Z', // ISO string, not epoch ms
+    '1700000000000', // numeric string
+    NaN,
+    Infinity,
+    -1700000000000, // negative
+    0, // not a positive instant
+    [],
+    {},
+    true,
+  ];
+  for (const value of badReported) {
+    assert.throws(
+      () =>
+        createProvenance({
+          epistemic: 'reported',
+          sourceId: 'opensky',
+          reportedAtMs: value,
+          receivedAtMs: 1700000005000,
+        }),
+      undefined,
+      `reportedAtMs ${JSON.stringify(value)} must be rejected`,
+    );
+  }
+  for (const value of ['1700000000000', NaN, Infinity, -1, {}]) {
+    assert.throws(
+      () =>
+        createProvenance({
+          epistemic: 'reported',
+          sourceId: 'opensky',
+          receivedAtMs: value,
+        }),
+      undefined,
+      `receivedAtMs ${JSON.stringify(value)} must be rejected`,
+    );
+  }
+  // A descriptor built from a malformed batch must be impossible, so a
+  // consumer catching the throw has nothing to store: absence stays honest.
+  assert.throws(() => createProvenance({ epistemic: 'reported', sourceId: 'opensky', reportedAtMs: 'soon', receivedAtMs: 1 }));
+});
+
+// I3a finalization — determinism: the authority is a pure function of its
+// explicitly supplied facts. No clock, no environment, no hidden state.
+test('provenance primitive: deterministic output for identical inputs', () => {
+  const input = {
+    epistemic: 'reported',
+    sourceId: 'adsb.lol',
+    reportedAtMs: 1700000000000,
+    receivedAtMs: 1700000005000,
+  };
+  const a = createProvenance({ ...input });
+  const b = createProvenance({ ...input });
+  assert.deepEqual(a, b);
+  assert.deepEqual(Object.keys(a).sort(), ['epistemic', 'receivedAtMs', 'reportedAtMs', 'sourceId', 'via']);
+  assert.ok(Object.isFrozen(a));
+  assert.ok(Object.isFrozen(b));
+  assert.notEqual(a, b); // fresh object per call, equal in content
+});

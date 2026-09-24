@@ -40,7 +40,7 @@ See [application construction](APPLICATION.md) and the
 
 ## Import direction gates
 
-`npm run check:boundaries` runs two complementary checks:
+`npm run check:boundaries` runs five checks:
 
 1. `scripts/check-import-directions.mjs` parses every runtime JS/MJS/CJS file in
    `src/` and `server/`, including files unused by the current bundle. Static,
@@ -53,6 +53,24 @@ See [application construction](APPLICATION.md) and the
    assigns each export exactly once and lists its owned modules and external
    dependencies. Unused imports still count. Node exports have only a `node`
    condition; browser groups cannot use build-only dependency exceptions.
+3. `scripts/check-spatial-authority.mjs` freezes the raw geographic-distance
+   sites outside the spatial authority `src/data/geo.js` (shrink-only
+   allowlist; see the spatial sections of this document).
+4. `scripts/check-identity-authority.mjs` freezes the I2 identity boundaries:
+   `recordIndex` stays free of Cesium/UI/lifecycle/analyst and delegates
+   canonical validation to `entityKey`; the entity accessors do not route
+   through analyst records; no history state in the index.
+5. `scripts/check-provenance-authority.mjs` freezes the I3 provenance
+   boundaries: `src/data/provenance.js` remains a zero-import, wall-clock-free,
+   Cesium/DOM/network-free leaf; its four-value epistemic vocabulary and
+   `createProvenance` are the only construction path (no second vocabulary, no
+   hand-rolled descriptors anywhere in `src/`); the identity surface
+   (`entityKey`, `recordIndex`, `currentRecordIndex`) and the freshness
+   authority (`feedState`) stay provenance-unaware; and the record stores that
+   own the provenance sidecars (`layers/{flights,military,vessels}/records.js`)
+   remain Cesium/DOM-free so rendering visibility cannot affect provenance.
+   Field semantics, per-feed facts and known gaps are documented in
+   [PROVENANCE.md](PROVENANCE.md).
 
 Portable source graphs cannot reach application/rendering, Node, Cesium or
 browser globals. This includes `sources/*`, dedicated `layers/*/source` exports,
