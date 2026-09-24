@@ -21,6 +21,7 @@ import {
 import { CCTV_FOCUS_RESULT } from '../layers/cctv/index.js';
 import { contextModeWord } from '../contextModePolicy.js';
 import { createAnalystEngine } from '../data/analystEngine.js';
+import { buildCurrentRecordIndex } from '../data/currentRecordIndex.js';
 import { layerFeedState } from '../data/feedState.js';
 import {
   initCameraVerbs,
@@ -2412,7 +2413,68 @@ function collectTrackedEntities(dataManager) {
       // layer not ready
     }
   }
-  return tracked;
+  return withCanonicalIdentity(dataManager, tracked);
+}
+
+/** Native identifier carried by the store records of each indexed family. */
+const CANONICAL_NATIVE_ID = Object.freeze({
+  aircraft: 'icao24',
+  vessel: 'mmsi',
+});
+
+/**
+ * Attribute tracked aircraft and the selected vessel to the canonical current
+ * record index: the entity key their owning store assigned, and every current
+ * store that represents that entity (a civil and a military record for one
+ * aircraft stay separately attributed). Read-only and on demand — the index is
+ * built only when such an entry exists, never cached, never per frame.
+ * Attribution comes only from that one snapshot; no store is read again.
+ * `canonical: null` means no attribution is available right now (a
+ * non-canonical identifier, an owning layer that is not settled on, or an
+ * unreadable store); it never means the entity departed. `eligibleStoreIds`
+ * names the stores consulted, so a store that was off is never read as a store
+ * that did not see the entity.
+ * @param {object} dataManager Layer lifecycle manager.
+ * @param {Array<object>} tracked Read-back entries.
+ * @returns {Array<object>} The entries; aircraft/vessel ones gain `canonical`.
+ */
+function withCanonicalIdentity(dataManager, tracked) {
+  if (!tracked.some((entry) => CANONICAL_NATIVE_ID[entry.kind])) return tracked;
+  let current = null;
+  try {
+    current = buildCurrentRecordIndex(dataManager);
+  } catch {
+    // An unreadable store leaves identity unattributed; the read-back stands.
+  }
+  return tracked.map((entry) =>
+    CANONICAL_NATIVE_ID[entry.kind]
+      ? { ...entry, canonical: canonicalAttribution(current, entry) }
+      : entry,
+  );
+}
+
+function canonicalAttribution(current, entry) {
+  // Only a store the index just consulted may attribute its own contact, and
+  // only from the records it contributed to that same snapshot.
+  const owner = current?.stores.find(
+    (store) => store.layerId === entry.layerId,
+  );
+  if (!owner) return null;
+  const idField = CANONICAL_NATIVE_ID[entry.kind];
+  const nativeId = entry[idField];
+  if (nativeId == null || nativeId === '') return null;
+  // The key is the one the owning store assigned to this very record in the
+  // captured snapshot; it is never derived from the native identifier.
+  const entityKey = owner.records.find(
+    (record) => record?.[idField] === nativeId,
+  )?.entityKey;
+  const indexed = entityKey ? current.index.get(entityKey) : undefined;
+  if (!indexed) return null;
+  return {
+    entityKey: indexed.entityKey,
+    storeIds: indexed.records.map((record) => record.storeId),
+    eligibleStoreIds: current.stores.map((store) => store.storeId),
+  };
 }
 
 export async function getBasemapLabelContext(

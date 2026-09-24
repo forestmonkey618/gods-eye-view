@@ -1,5 +1,10 @@
 # Changelog
 
+- Build the canonical record index from the live Flights, Military Flights and
+  AIS Vessels stores, reading only layers settled ON. `get_current_view_state`
+  now reports each tracked aircraft and selected vessel with its canonical
+  entity key and the stores currently holding it, or `null` when unavailable.
+
 - Distinguish PARTIAL vessel snapshots from STALE data in the layer panel, with
   accepted-record counts and unchanged retention, freshness and outage safeguards.
 
