@@ -360,3 +360,55 @@ test('I3b provenance: getCurrentEntities unchanged', () => {
   assert.equal(result[0].provenance, undefined);
   assert.equal(result[0].sourceId, undefined);
 });
+
+// I3a finalization — core rule: unknown must remain unknown. When the source
+// supplied no report time, the descriptor's reportedAtMs stays null. It must
+// NOT be filled with the wall clock (which the store uses elsewhere for its
+// own bookkeeping) or with the receipt time (a different clock with a
+// different meaning).
+test('I3b provenance: missing source time stays null — never filled by wall clock or receipt', () => {
+  const store = records();
+  store.geoidReady = true;
+  const WALL = 9999999999999; // sentinel wall clock, distinct from every fixture time
+  const receipt = 1700000009000;
+  const realNow = Date.now;
+  Date.now = () => WALL;
+  try {
+    store.receive(
+      obs({ positionTimeMs: null, contactTimeMs: null }),
+      view({ sourceId: 'opensky', receivedAtMs: receipt }),
+    );
+  } finally {
+    Date.now = realNow;
+  }
+  const prov = store.provenance.get('abc123');
+  // Position was reported (finite lat/lon) but carries no source time.
+  assert.ok(prov.position);
+  assert.equal(prov.position.sourceId, 'opensky');
+  assert.equal(prov.position.reportedAtMs, null, 'no source time — stays null');
+  assert.equal(prov.position.receivedAtMs, receipt);
+  assert.notEqual(prov.position.reportedAtMs, WALL, 'wall clock must not fill the report time');
+  assert.notEqual(prov.position.reportedAtMs, receipt, 'receipt time must not be relabelled as report time');
+  // Kinematics share the same honesty: contact time missing too.
+  assert.equal(prov.velocity.reportedAtMs, null);
+  assert.equal(prov.callsign.reportedAtMs, null);
+  // The store's own bookkeeping may still use the wall clock — provenance must not.
+  assert.equal(store.data.get('abc123').observedReceiptMs, WALL);
+});
+
+// I3a finalization — the authority must not mutate source records. The
+// observation is the feed's data; receive() reads it, it never writes back.
+test('I3b provenance: receive() does not mutate the incoming observation', () => {
+  const store = records();
+  store.geoidReady = true;
+  const original = obs();
+  const frozen = JSON.parse(JSON.stringify(original));
+  store.receive(original, view({ sourceId: 'opensky', receivedAtMs: 1700000005000 }));
+  // A second receive with the same object must see identical inputs.
+  store.receive(original, view({ sourceId: 'opensky', receivedAtMs: 1700000006000 }));
+  assert.deepEqual(original, frozen, 'observation must be unmodified');
+  // And the provenance sidecar must not alias the observation either.
+  const prov = store.provenance.get('abc123');
+  assert.ok(Object.isFrozen(prov.position));
+  assert.equal(prov.position.sourceId, 'opensky');
+});
