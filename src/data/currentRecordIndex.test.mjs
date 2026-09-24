@@ -319,6 +319,36 @@ function attribution(index) {
   );
 }
 
+/**
+ * Let a production store move on the instant the adapter has captured it.
+ * The first read returns the store's real records and then runs `moveOn` (a
+ * real store change); every later read counts as a reread and sees
+ * `later(records)`. `restore()` reinstates the plain accessor.
+ */
+function moveOnAfterCapture(
+  layer,
+  { moveOn = () => {}, later = (records) => records } = {},
+) {
+  const read = layer.getCurrentEntities;
+  const reads = { captured: 0, reread: 0 };
+  layer.getCurrentEntities = () => {
+    if (reads.captured > 0) {
+      reads.reread += 1;
+      return later(read());
+    }
+    reads.captured += 1;
+    const capture = read();
+    moveOn();
+    return capture;
+  };
+  return {
+    reads,
+    restore() {
+      layer.getCurrentEntities = read;
+    },
+  };
+}
+
 test('production vessel records are valid buildRecordIndex input (verified, not assumed)', async (t) => {
   const { lifecycle, vessels } = createProductionStores(t);
   await lifecycle.setEnabled('ais-live-vessels', true);
@@ -547,13 +577,19 @@ test('building and mutating the index never mutates the authoritative stores', a
       [...vessels.getProvenanceMap()],
     ]);
   const baseline = snapshot();
-  const { index } = buildCurrentRecordIndex(lifecycle);
+  const { index, stores } = buildCurrentRecordIndex(lifecycle);
   const entry = index.get(SHARED_KEY);
   entry.records[0].record.lat = -1;
   entry.records[1].record.callsign = 'TAMPERED';
   entry.records.pop();
   for (const item of index.values())
     for (const { record } of item.records) record.entityKey = 'banana';
+  // The exposed capture cannot be extended, and its records are the
+  // accessors' fresh copies: tampering with them reaches neither the stores
+  // nor the index built from them.
+  assert.throws(() => stores[0].records.push({ entityKey: CIVIL_KEY }));
+  for (const store of stores)
+    for (const record of store.records) record.entityKey = 'banana';
   assert.equal(snapshot(), baseline, 'store records and provenance unchanged');
   assert.deepEqual(
     index.get(SHARED_KEY).records.map(({ record }) => record.callsign),
@@ -561,6 +597,63 @@ test('building and mutating the index never mutates the authoritative stores', a
     'index copies are independent of consumer mutation',
   );
   assert.equal(Object.isFrozen(index), true);
+});
+
+test('each eligible store is read once, and the index is built from exactly the records exposed beside it', async (t) => {
+  const { lifecycle, flights, military, vessels } = createProductionStores(t);
+  for (const id of ['flights', 'military', 'ais-live-vessels'])
+    await lifecycle.setEnabled(id, true);
+  await lifecycle.setEnabled('military', false);
+  const reads = { flights: [], military: [], vessels: [] };
+  for (const [storeId, layer] of Object.entries({
+    flights,
+    military,
+    vessels,
+  })) {
+    const read = layer.getCurrentEntities;
+    layer.getCurrentEntities = () => {
+      const records = read();
+      reads[storeId].push(records);
+      return records;
+    };
+  }
+  const { index, stores } = buildCurrentRecordIndex(lifecycle);
+  assert.deepEqual(
+    Object.fromEntries(
+      Object.entries(reads).map(([storeId, calls]) => [storeId, calls.length]),
+    ),
+    { flights: 1, military: 0, vessels: 1 },
+    'one read per settled-ON store; none of the disabled one',
+  );
+  assert.equal(Object.isFrozen(stores), true);
+  for (const store of stores) {
+    const [captured] = reads[store.storeId];
+    assert.equal(Object.isFrozen(store), true);
+    assert.equal(Object.isFrozen(store.records), true);
+    // That read's own record objects, in order: nothing reread or rebuilt.
+    assert.equal(store.records.length, captured.length);
+    store.records.forEach((record, i) => assert.equal(record, captured[i]));
+    assert.equal(
+      Object.isFrozen(captured),
+      false,
+      "the accessor's own array is left untouched",
+    );
+  }
+  // The index holds exactly the canonical records of that same capture.
+  const captured = {};
+  for (const { storeId, records } of stores)
+    for (const { entityKey } of records)
+      if (entityKey !== null) (captured[entityKey] ??= []).push(storeId);
+  assert.deepEqual(attribution(index), captured);
+  assert.deepEqual(captured, {
+    [CIVIL_KEY]: ['flights'],
+    [SHARED_KEY]: ['flights'],
+    'vessel:mmsi:012345678': ['vessels'],
+  });
+  assert.ok(
+    stores[0].records.some((record) => record.entityKey === null),
+    'non-canonical records are captured too; only the index decides identity',
+  );
 });
 
 test('results are deterministic across rebuilds and independent of enable order', async (t) => {
@@ -704,20 +797,31 @@ test('production consumer: get_current_view_state attributes tracked contacts th
       id: icao24 ?? mmsi,
       canonical,
     }));
-  const trackedNow = async () =>
-    readBack(await runner('get_current_view_state'));
-  let storeReads = 0;
-  for (const layer of [flights, military, vessels]) {
+  // Store reads during each read-back: the adapter's single capture of every
+  // settled-ON store and nothing more — attribution never reads a store again.
+  const reads = {};
+  for (const [storeId, layer] of Object.entries({
+    flights,
+    military,
+    vessels,
+  })) {
     const read = layer.getCurrentEntities;
     layer.getCurrentEntities = () => {
-      storeReads += 1;
+      reads[storeId] = (reads[storeId] ?? 0) + 1;
       return read();
     };
   }
+  const resetReads = () => {
+    for (const storeId of Object.keys(reads)) delete reads[storeId];
+  };
+  const trackedNow = async () => {
+    resetReads();
+    return readBack(await runner('get_current_view_state'));
+  };
 
   await lifecycle.setEnabled('flights', true);
   assert.deepEqual(await trackedNow(), []);
-  assert.equal(storeReads, 0, 'nothing tracked: no index is built');
+  assert.deepEqual(reads, {}, 'nothing tracked: no index is built');
 
   assert.equal(flights.trackById(SHARED, { origin: 'programmatic' }), true);
   assert.deepEqual(await trackedNow(), [
@@ -731,6 +835,7 @@ test('production consumer: get_current_view_state attributes tracked contacts th
       },
     },
   ]);
+  assert.deepEqual(reads, { flights: 1 });
 
   // Military now reports the same airframe: one entity, both stores named.
   await lifecycle.setEnabled('military', true);
@@ -739,6 +844,7 @@ test('production consumer: get_current_view_state attributes tracked contacts th
     storeIds: ['flights', 'military'],
     eligibleStoreIds: ['flights', 'military'],
   });
+  assert.deepEqual(reads, { flights: 1, military: 1 });
 
   // Following the military contact releases the civil one; attribution is
   // still to one canonical entity with both current store records.
@@ -765,6 +871,7 @@ test('production consumer: get_current_view_state attributes tracked contacts th
       },
     },
   ]);
+  assert.deepEqual(reads, { flights: 1, military: 1, vessels: 1 });
 
   // While Military is disabling, its contact is still read back but is not
   // attributed — and nothing about it is inferred.
@@ -776,6 +883,7 @@ test('production consumer: get_current_view_state attributes tracked contacts th
     )
       duringDisable = runner('get_current_view_state');
   });
+  resetReads();
   await lifecycle.setEnabled('military', false);
   unsubscribe();
   assert.deepEqual(readBack(await duringDisable), [
@@ -790,6 +898,11 @@ test('production consumer: get_current_view_state attributes tracked contacts th
       },
     },
   ]);
+  assert.deepEqual(
+    reads,
+    { flights: 1, vessels: 1 },
+    'the disabling store is not read',
+  );
 
   // Contacts without canonical identity are read back, never keyed: a TIS-B
   // aircraft, and a vessel whose MMSI would pass as an indexed ICAO24.
@@ -804,4 +917,153 @@ test('production consumer: get_current_view_state attributes tracked contacts th
     { layerId: 'flights', id: '~abc123', canonical: null },
     { layerId: 'ais-live-vessels', id: '123456', canonical: null },
   ]);
+  assert.deepEqual(reads, { flights: 1, vessels: 1 });
+
+  // Re-enabling: Military's retained cache is not current until its first
+  // poll lands, so while the layer enables it is neither read nor named.
+  // (Tracking a flight releases the vessel selection, so only the airframe
+  // is read back from here on.)
+  assert.equal(flights.trackById(SHARED, { origin: 'programmatic' }), true);
+  let duringEnable = null;
+  const unsubscribeEnable = lifecycle.subscribe((change) => {
+    if (
+      change.type === 'visibility-transition' &&
+      change.layerId === 'military'
+    )
+      duringEnable = runner('get_current_view_state');
+  });
+  resetReads();
+  await lifecycle.setEnabled('military', true);
+  unsubscribeEnable();
+  assert.deepEqual(readBack(await duringEnable), [
+    {
+      layerId: 'flights',
+      id: SHARED,
+      canonical: {
+        entityKey: SHARED_KEY,
+        storeIds: ['flights'],
+        eligibleStoreIds: ['flights', 'vessels'],
+      },
+    },
+  ]);
+  assert.deepEqual(
+    reads,
+    { flights: 1, vessels: 1 },
+    'the enabling store is not read',
+  );
+  assert.deepEqual((await trackedNow())[0].canonical, {
+    entityKey: SHARED_KEY,
+    storeIds: ['flights', 'military'],
+    eligibleStoreIds: ['flights', 'military', 'vessels'],
+  });
+  assert.deepEqual(reads, { flights: 1, military: 1, vessels: 1 });
+});
+
+test('production consumer: attribution comes only from the adapter snapshot, never from rereading a store', async (t) => {
+  const { lifecycle, viewer, feeds, flights, military, vessels } =
+    createProductionStores(t);
+  const runner = createGevActionRunner({
+    viewer,
+    styleManager: { activeStyle: 'normal' },
+    dataManager: lifecycle,
+  });
+  const canonicalNow = async () =>
+    Object.fromEntries(
+      (await runner('get_current_view_state')).tracked.map(
+        ({ layerId, canonical }) => [layerId, canonical],
+      ),
+    );
+  for (const id of ['flights', 'military', 'ais-live-vessels'])
+    await lifecycle.setEnabled(id, true);
+  assert.equal(flights.trackById(SHARED, { origin: 'programmatic' }), true);
+  assert.equal(vessels.selectById('012345678'), true);
+  const everyStore = ['flights', 'military', 'vessels'];
+  const expected = {
+    flights: {
+      entityKey: SHARED_KEY,
+      storeIds: ['flights', 'military'],
+      eligibleStoreIds: everyStore,
+    },
+    'ais-live-vessels': {
+      entityKey: 'vessel:mmsi:012345678',
+      storeIds: ['vessels'],
+      eligibleStoreIds: everyStore,
+    },
+  };
+  assert.deepEqual(await canonicalNow(), expected);
+
+  // Presentation is not an input: hiding every rendered collection and
+  // billboard changes nothing.
+  for (const primitive of viewer.rendered)
+    if (primitive instanceof Cesium.BillboardCollection) {
+      primitive.show = false;
+      for (let i = 0; i < primitive.length; i++) primitive.get(i).show = false;
+    }
+  assert.deepEqual(await canonicalNow(), expected);
+
+  // Every store moves on the instant the adapter has captured it. The AIS
+  // store really evicts the selected vessel through its production reconcile
+  // (a selected vessel survives three missed complete snapshots, not four).
+  // A later read would see Flights contradict its capture — the tracked
+  // airframe under another entity's key, the TIS-B contact under a canonical
+  // one — and Military empty.
+  const rekeyed = { [SHARED]: CIVIL_KEY, '~abc123': SHARED_KEY };
+  const contradict = (records) =>
+    records.map((record) =>
+      rekeyed[record.icao24]
+        ? { ...record, entityKey: rekeyed[record.icao24] }
+        : record,
+    );
+  const remaining = feeds.vessels.filter((row) => row.mmsi !== '012345678');
+  const movedOn = [
+    moveOnAfterCapture(flights, { later: contradict }),
+    moveOnAfterCapture(military, { later: () => [] }),
+    moveOnAfterCapture(vessels, {
+      moveOn() {
+        for (let refresh = 0; refresh < 4; refresh++)
+          vessels.testing._reconcileVesselsForTest(viewer, remaining);
+      },
+    }),
+  ];
+  assert.deepEqual(
+    await canonicalNow(),
+    expected,
+    'attribution matches the captured snapshot, not the moved-on stores',
+  );
+  for (const store of movedOn) {
+    assert.deepEqual(store.reads, { captured: 1, reread: 0 });
+    store.restore();
+  }
+  assert.equal(
+    vessels.getCurrentEntities().some((record) => record.mmsi === '012345678'),
+    false,
+    'the AIS store really moved on after the capture',
+  );
+
+  // A contact captured without canonical identity stays unattributed,
+  // whatever a later read of its store would claim.
+  assert.equal(flights.trackById('~abc123', { origin: 'programmatic' }), true);
+  const civil = moveOnAfterCapture(flights, { later: contradict });
+  assert.deepEqual(await canonicalNow(), { flights: null });
+  assert.deepEqual(civil.reads, { captured: 1, reread: 0 });
+  civil.restore();
+
+  // The owning store's assignment in the capture is the identity, even one
+  // the native identifier does not spell (as if the store had correlated the
+  // TIS-B track to an ICAO address): the consumer never re-derives a key.
+  const read = flights.getCurrentEntities;
+  flights.getCurrentEntities = () =>
+    read().map((record) =>
+      record.icao24 === '~abc123'
+        ? { ...record, entityKey: 'aircraft:icao24:abc123' }
+        : record,
+    );
+  assert.deepEqual(await canonicalNow(), {
+    flights: {
+      entityKey: 'aircraft:icao24:abc123',
+      storeIds: ['flights'],
+      eligibleStoreIds: everyStore,
+    },
+  });
+  flights.getCurrentEntities = read;
 });

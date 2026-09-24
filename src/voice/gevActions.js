@@ -2428,6 +2428,7 @@ const CANONICAL_NATIVE_ID = Object.freeze({
  * store that represents that entity (a civil and a military record for one
  * aircraft stay separately attributed). Read-only and on demand — the index is
  * built only when such an entry exists, never cached, never per frame.
+ * Attribution comes only from that one snapshot; no store is read again.
  * `canonical: null` means no attribution is available right now (a
  * non-canonical identifier, an owning layer that is not settled on, or an
  * unreadable store); it never means the entity departed. `eligibleStoreIds`
@@ -2447,34 +2448,26 @@ function withCanonicalIdentity(dataManager, tracked) {
   }
   return tracked.map((entry) =>
     CANONICAL_NATIVE_ID[entry.kind]
-      ? {
-          ...entry,
-          canonical: canonicalAttribution(dataManager, current, entry),
-        }
+      ? { ...entry, canonical: canonicalAttribution(current, entry) }
       : entry,
   );
 }
 
-function canonicalAttribution(dataManager, current, entry) {
-  // Only a store the index just consulted may attribute its own contact.
-  if (!current?.stores.some((store) => store.layerId === entry.layerId))
-    return null;
+function canonicalAttribution(current, entry) {
+  // Only a store the index just consulted may attribute its own contact, and
+  // only from the records it contributed to that same snapshot.
+  const owner = current?.stores.find(
+    (store) => store.layerId === entry.layerId,
+  );
+  if (!owner) return null;
   const idField = CANONICAL_NATIVE_ID[entry.kind];
   const nativeId = entry[idField];
   if (nativeId == null || nativeId === '') return null;
-  let records = null;
-  try {
-    records = dataManager.layers
-      .get(entry.layerId)
-      ?.module?.getCurrentEntities?.();
-  } catch {
-    return null;
-  }
-  // The key is the one the owning store assigned to this very record; it is
-  // never derived from the native identifier.
-  const entityKey = Array.isArray(records)
-    ? records.find((record) => record?.[idField] === nativeId)?.entityKey
-    : null;
+  // The key is the one the owning store assigned to this very record in the
+  // captured snapshot; it is never derived from the native identifier.
+  const entityKey = owner.records.find(
+    (record) => record?.[idField] === nativeId,
+  )?.entityKey;
   const indexed = entityKey ? current.index.get(entityKey) : undefined;
   if (!indexed) return null;
   return {

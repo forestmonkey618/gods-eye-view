@@ -11,7 +11,9 @@ is no cache, history or departure inference, and no Cesium or visibility input.
 `get_current_view_state` is the first consumer: each tracked aircraft and the
 selected vessel in `tracked` carries `canonical: {entityKey, storeIds,
 eligibleStoreIds}`, or `null` when no attribution is available. `null` is not a
-departure. The index is built only when such a contact exists.
+departure. The index is built only when such a contact exists. Each store is
+read once per build and its records are returned beside the index
+(`stores[].records`); attribution uses only that snapshot, never a second read.
 
 Vessel snapshot completeness is separate from freshness. A current snapshot with
 rejected or duplicate records shows PARTIAL with accepted/received counts; stale
