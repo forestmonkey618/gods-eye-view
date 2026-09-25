@@ -40,7 +40,7 @@ See [application construction](APPLICATION.md) and the
 
 ## Import direction gates
 
-`npm run check:boundaries` runs five checks:
+`npm run check:boundaries` runs six checks:
 
 1. `scripts/check-import-directions.mjs` parses every runtime JS/MJS/CJS file in
    `src/` and `server/`, including files unused by the current bundle. Static,
@@ -71,6 +71,17 @@ See [application construction](APPLICATION.md) and the
    remain Cesium/DOM-free so rendering visibility cannot affect provenance.
    Field semantics, per-feed facts and known gaps are documented in
    [PROVENANCE.md](PROVENANCE.md).
+6. `scripts/check-source-registry-authority.mjs` freezes the I4a source
+   registry boundaries: `src/data/sourceRegistry.js` remains a zero-import,
+   wall-clock-free, Cesium/DOM/network/env-free leaf; descriptors carry only
+   static identity/description keys (no freshness, lifecycle, store/layer or
+   credential state); `createSourceRegistry` is the single construction path
+   and no competing source registry may be defined anywhere in `src/` or
+   `server/`; `provenance.js` never references the registry so unknown
+   sourceIds stay representable at ingestion; and the registry's key grammar
+   mirrors the provenance `sourceId` grammar. Descriptor contract, registered
+   sources and known gaps are documented in
+   [SOURCE-REGISTRY.md](SOURCE-REGISTRY.md).
 
 Portable source graphs cannot reach application/rendering, Node, Cesium or
 browser globals. This includes `sources/*`, dedicated `layers/*/source` exports,

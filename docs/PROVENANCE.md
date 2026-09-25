@@ -185,9 +185,12 @@ input.
   per-field `reportedAtMs`.
 - **adsbdb upstream fetch time** is stripped by the proxy; only the client
   receipt is represented. Surfacing it is an age/freshness concern (I5).
-- **`sourceId` existence is not validated** — the authority validates grammar
-  only. The source/sensor registry that resolves `sourceId` to a descriptor
-  is I4.
+- **`sourceId` existence is not validated here** — the provenance authority
+  validates grammar only. Resolving a `sourceId` to a known source is I4: the
+  canonical Source Registry (`src/data/sourceRegistry.js`, see
+  [SOURCE-REGISTRY.md](SOURCE-REGISTRY.md)) answers it at query time, and
+  `createProvenance` deliberately stays independent of registry membership so
+  unknown/future source ids remain representable at ingestion.
 - **Freshness/staleness is not in the descriptor.** `feedState.js`'s seven
   states and any age computation remain separate (I5).
 - **`MODELED` and `INTERPRETED` are unassigned in production.** The primitive
