@@ -63,7 +63,7 @@ A descriptor is a frozen plain object with exactly these keys:
 | `sourceId` | yes | Stable machine identity of the **external** origin; the registry key | The exact `sourceId` string I3 provenance records. Grammar mirrors `provenance.js` (which owns it): 1–128 trimmed chars of `[a-z0-9._:-]`, no whitespace. Never a `storeId`, layer id, display label or URL. |
 | `name` | yes | Human-readable display name | Non-empty string. Presentation text only — never identity. |
 | `homeUrl` | no | Official/home URL of the source | Non-empty string, **only when established** by repository configuration/documentation or careful verification. |
-| `license` | no | License/terms statement for the data | Non-empty string, only when established. May be a non-standard terms statement (e.g. "no formal ToS") when that is the documented truth. |
+| `license` | no | The **actual license** established for the data | Non-empty string naming a real license (e.g. `ODbL 1.0`), only when one is established. Descriptive terms/status/policy prose is **not** a license value: when no formal license exists the field is absent, and such statements live in documentation context only (no `terms`/`notes` field exists to carry them). |
 | `licenseUrl` | no | URL of the license text | Non-empty string, only when established. |
 | `attribution` | no | Attribution line for the source | Non-empty string, only when required/known. Plain text — `dataCredits.js` owns rendered credit HTML. |
 
@@ -84,7 +84,7 @@ production set:
 |---|---|---|---|
 | `adsb.lol` | `adsb.lol` | The adsb.lol ADS-B network (readsb deployments): military-flight snapshots, aircraft traces, and the bounded 250 nm civil-flight fallback. `homeUrl` `https://adsb.lol`; `license` `ODbL 1.0`; `licenseUrl` the canonical ODbL 1.0 text; `attribution` `adsb.lol (ODbL)`. | `DATA_SOURCES.md` (ODbL 1.0, "adsb.lol" attribution), `dataCredits.js` |
 | `adsbdb` | `adsbdb` | The adsbdb aircraft/route database (api.adsbdb.com) supplying civil-flight enrichment: type, registration, airline and route. `homeUrl` `https://www.adsbdb.com`. **`license` and `attribution` are intentionally absent** — no license or attribution is established anywhere in this repository's configuration or docs (known gap, see below). | server `providers/aircraft/enrichment.js` + verified against the public adsbdb service |
-| `aisstream` | `AISStream.io` | The AISStream.io live AIS stream supplying the vessels store. `homeUrl` `https://aisstream.io`; `license` `Free, beta, no formal ToS; AIS is a public broadcast` (the documented truth — there is no formal license to name); `attribution` `AISStream.io (courtesy)`. | `DATA_SOURCES.md`, `dataCredits.js` |
+| `aisstream` | `AISStream.io` | The AISStream.io live AIS stream supplying the vessels store. `homeUrl` `https://aisstream.io`; `attribution` `AISStream.io (courtesy)`. **`license` is intentionally absent** — no formal license is established (see the contextual note below). | `DATA_SOURCES.md`, `dataCredits.js` |
 | `opensky` | `OpenSky Network` | The OpenSky Network state-vector feed — the primary worldwide civil-flight snapshot. `homeUrl` `https://opensky-network.org`; `license` `Non-commercial research/education license`; `attribution` the required OpenSky citation. | `DATA_SOURCES.md`, `dataCredits.js` |
 
 Not registered — on purpose: GEV store ids, `LAYER_STATE_REGISTRY` layer ids
@@ -93,6 +93,14 @@ Not registered — on purpose: GEV store ids, `LAYER_STATE_REGISTRY` layer ids
 transit feed ids, fixture-only ids, and any historical or inferred name. Tests
 may build fixture registries with fixture-only ids; those never become
 production entries.
+
+**Contextual note — documentation, not a canonical `license` value.**
+`DATA_SOURCES.md` records AISStream's terms/status as *"Free, beta, no formal
+ToS; AIS is a public broadcast"*. That statement is descriptive policy prose:
+AISStream has no formal license to name, so the `license` field is **absent**
+and the prose is retained here (and in `DATA_SOURCES.md`) as context only. If
+AISStream ever publishes actual license terms, `license`/`licenseUrl` can be
+filled in as an ordinary reviewed change.
 
 ## Identity — `sourceId` vs `storeId` vs layer ID
 
@@ -202,7 +210,7 @@ using it is enabled, eligible, visible or loaded. Those states live in
 
 | File | Guarantees |
 |---|---|
-| `src/data/sourceRegistry.test.mjs` | Each production source resolves with truthful identity and the production set is exactly these four; unknown/non-string ids never resolve and never alias (exact match only); lookups never mutate descriptors and all returned state is frozen; consumer mutation (descriptors, enumeration, input entries) cannot reach canonical state; enumeration is deterministic and sorted; duplicate `sourceId`s throw (including whitespace-normalizing duplicates); the registry reads no wall clock (fresh module init under a poisoned `Date.now`); descriptors are independent of credential/environment state (poisoned env, fresh import); descriptors carry no lifecycle and no rendering-visibility keys and the builder rejects such state; source ids are disjoint from `LAYER_STATE_REGISTRY` layer ids and store ids; one store can truthfully use multiple registered sources (flights → `opensky`/`adsb.lol`/`adsbdb`, vessels → `aisstream`) with no store binding anywhere; fixture-only ids resolve in fixture registries but never in the canonical one; I3 `createProvenance` semantics are unchanged and membership-free (unknown-but-valid ids still ingest). |
+| `src/data/sourceRegistry.test.mjs` | Each production source resolves with truthful identity and the production set is exactly these four; unestablished licenses stay absent (AISStream/adsbdb carry no `license`; policy prose never returns as one and no `terms`/`notes` field exists — established licenses on `adsb.lol`/`opensky` remain); unknown/non-string ids never resolve and never alias (exact match only); lookups never mutate descriptors and all returned state is frozen; consumer mutation (descriptors, enumeration, input entries) cannot reach canonical state; enumeration is deterministic and sorted; duplicate `sourceId`s throw (including whitespace-normalizing duplicates); the registry reads no wall clock (fresh module init under a poisoned `Date.now`); descriptors are independent of credential/environment state (poisoned env, fresh import); descriptors carry no lifecycle and no rendering-visibility keys and the builder rejects such state; source ids are disjoint from `LAYER_STATE_REGISTRY` layer ids and store ids; one store can truthfully use multiple registered sources (flights → `opensky`/`adsb.lol`/`adsbdb`, vessels → `aisstream`) with no store binding anywhere; fixture-only ids resolve in fixture registries but never in the canonical one; I3 `createProvenance` semantics are unchanged and membership-free (unknown-but-valid ids still ingest). |
 
 `scripts/check-source-registry-authority.mjs` freezes the architecture: the
 authority stays a zero-import leaf free of clock/Cesium/DOM/network/storage/env

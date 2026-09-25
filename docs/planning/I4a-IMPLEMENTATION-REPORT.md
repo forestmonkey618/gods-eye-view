@@ -55,7 +55,7 @@ set is exactly four external origins:
 | `opensky` | Flights store, primary path (server sets no `X-Flight-Source` header — route invariant) | name/homeUrl/license/attribution from `DATA_SOURCES.md` + `dataCredits.js` |
 | `adsb.lol` | Flights store regional fallback (`X-Flight-Source: adsb.lol`) + Military store (all reported fields) | name/homeUrl/license/attribution from `DATA_SOURCES.md` + `dataCredits.js` (ODbL 1.0; `licenseUrl` = the canonical ODbL URL already used elsewhere in-repo) |
 | `adsbdb` | Flights store enrichment (type/registration/airline/route; `enrichmentCore.js`) | name in code/docs; `homeUrl` `https://www.adsbdb.com` **verified against the live service** (repo proxy code uses `api.adsbdb.com`). **License/attribution UNKNOWN — intentionally absent** (compliance gap called out below) |
-| `aisstream` | Vessels store (all reported fields) | name/homeUrl/license/attribution from `DATA_SOURCES.md` + `dataCredits.js` ("Free, beta, no formal ToS; AIS is a public broadcast" is the documented truth) |
+| `aisstream` | Vessels store (all reported fields) | name/homeUrl/attribution from `DATA_SOURCES.md` + `dataCredits.js`. **`license` absent** — no formal license is established (the `DATA_SOURCES.md` terms/status note is documentation context only; see Part F) |
 
 Nothing else is a production provenance origin today: no store ids, no layer
 ids, no overlay ids, no detection ids, no transit feed ids, no map providers,
@@ -66,8 +66,10 @@ deliberately NOT registered.)
 **Questionable metadata not guessed:** `adsbdb` has no `DATA_SOURCES.md` row
 and no `dataCredits.js` entry anywhere in the repository; its descriptor
 carries only id + name + verified home URL. AISStream has no formal license
-name — the documented terms statement is carried verbatim instead. OpenSky's
-license URL is not established in-repo, so `licenseUrl` is absent there.
+to name — its `license` field is **absent**, and the documented terms/status
+statement is retained as documentation context only (corrected after owner
+review, see Part F). OpenSky's license URL is not established in-repo, so
+`licenseUrl` is absent there.
 
 ---
 
@@ -178,3 +180,35 @@ named protection, then reverted:
 - `dataCredits.js` ↔ `DATA_SOURCES.md` sync enforcement.
 - Parametric sensor geometry — deferred to I4/I5 evaluation (MASTER-PLAN D10).
 - Registry-based query helpers — added when a consumer exists.
+
+---
+
+## Part F — Owner-review correction (2026-09-25)
+
+PR #8 review found one semantic issue: the AISStream entry encoded
+descriptive/legal-policy prose as a canonical `license` value —
+
+`license: 'Free, beta, no formal ToS; AIS is a public broadcast'` —
+
+even though the audit itself established that AISStream has **no formal
+license to name**. Under I4a's governing rule (unknown/unestablished metadata
+stays absent), policy prose is documentation context, not a license value.
+
+**Change:** the AISStream `license` field is removed. The `DATA_SOURCES.md`
+terms/status statement is retained as **contextual documentation** (a labeled
+note in `docs/SOURCE-REGISTRY.md` and in `DATA_SOURCES.md` itself), explicitly
+not a canonical `license` value. The schema is **not** broadened with a
+`terms`/`notes`/similar field — that can be considered in a later I4 slice if
+a real consumer requirement appears. A regression test locks the rule
+(`registry: unestablished licenses stay absent — policy prose is not a
+license`).
+
+**Same-rule re-audit of the other three entries** (established metadata kept;
+no changes made for symmetry):
+
+| Entry | `license` / related fields | Verdict |
+|---|---|---|
+| `adsb.lol` | `license: 'ODbL 1.0'`, `licenseUrl` (canonical ODbL 1.0 text, URL mapping already used in-repo), `attribution: 'adsb.lol (ODbL)'` | **Retained** — `ODbL 1.0` is an actual established license identifier (DATA_SOURCES.md License column), and the attribution is the established attribution line. Genuinely supported fields. |
+| `adsbdb` | `license`/`attribution` absent | **Unchanged** — already honest. |
+| `opensky` | `license: 'Non-commercial research/education license'`, `licenseUrl` absent, `attribution` = required OpenSky citation | **Retained — judgment call, flagged for owner visibility.** Unlike AISStream, an actual license regime IS established (DATA_SOURCES.md License column plus its compliance paragraph: non-commercial; live operational use may require prior written agreement). The value is a compact license designation (noun phrase naming the license category — the repo's canonical license wording for OpenSky), not "no formal license" status prose. If the owner prefers a stricter rule where `license` may only carry standard license identifiers, this value would also become absent — under the rule as reviewed ("when no actual license is established"), it is retained. |
+| `aisstream` | `license` removed; `name`/`homeUrl`/`attribution` (`AISStream.io (courtesy)` — the established DATA_SOURCES.md attribution line) | **Corrected** — the one prose-as-license value. The `(courtesy)` attribution wording is the documented attribution column value and remains genuinely supported. |

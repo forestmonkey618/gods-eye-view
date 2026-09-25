@@ -42,6 +42,29 @@ test('registry: every current production sourceId resolves with truthful identit
   );
 });
 
+test('registry: unestablished licenses stay absent — policy prose is not a license', () => {
+  // Owner-review rule: `license` carries an actual established license only.
+  // Descriptive/legal-policy prose (e.g. AISStream's documented "Free, beta,
+  // no formal ToS; AIS is a public broadcast") is documentation context, not a
+  // license value — it must never come back as `license`, and the schema is
+  // never broadened with a `terms`/`notes` field to smuggle it in.
+  const aisstream = getSourceDescriptor('aisstream');
+  assert.ok(!('license' in aisstream), 'AISStream has no formal license');
+  const adsbdb = getSourceDescriptor('adsbdb');
+  assert.ok(!('license' in adsbdb), 'adsbdb license is not established');
+  for (const descriptor of listSourceDescriptors()) {
+    for (const key of ['terms', 'notes', 'note', 'comment', 'policy']) {
+      assert.ok(!(key in descriptor), `${key} must not exist in descriptors`);
+    }
+  }
+  // Established licenses, conversely, remain — absence is not blanket.
+  assert.equal(getSourceDescriptor('adsb.lol').license, 'ODbL 1.0');
+  assert.equal(
+    getSourceDescriptor('opensky').license,
+    'Non-commercial research/education license',
+  );
+});
+
 test('registry: unknown source IDs do not magically become registered', () => {
   for (const unknown of [
     'definitely-not-a-source',

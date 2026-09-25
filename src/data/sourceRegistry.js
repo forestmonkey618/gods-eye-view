@@ -175,7 +175,11 @@ export function createSourceRegistry(entries) {
  *
  * Metadata facts are copied from repository configuration/documentation only
  * (`DATA_SOURCES.md`, `src/data/dataCredits.js`, server provider code) or
- * carefully verified; unknown facts stay absent rather than guessed.
+ * carefully verified; unknown facts stay absent rather than guessed. A
+ * `license` value requires an established actual license — descriptive
+ * terms/status/policy prose is documentation context (docs/SOURCE-REGISTRY.md),
+ * never a canonical `license` value, and no `terms`/`notes` field exists to
+ * carry it.
  */
 const SOURCE_REGISTRY = createSourceRegistry([
   Object.freeze({
@@ -202,7 +206,10 @@ const SOURCE_REGISTRY = createSourceRegistry([
     sourceId: 'aisstream',
     name: 'AISStream.io',
     homeUrl: 'https://aisstream.io',
-    license: 'Free, beta, no formal ToS; AIS is a public broadcast',
+    // license: intentionally ABSENT — no formal license is established. The
+    // DATA_SOURCES.md terms/status note ("Free, beta, no formal ToS; AIS is a
+    // public broadcast") is descriptive policy prose, not a license value;
+    // it is retained as documentation context (docs/SOURCE-REGISTRY.md) only.
     attribution: 'AISStream.io (courtesy)',
   }),
   Object.freeze({
