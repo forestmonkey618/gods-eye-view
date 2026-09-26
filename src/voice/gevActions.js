@@ -3163,6 +3163,9 @@ async function getEntityContext(
  * @returns {object|null} A unified-count payload, or null.
  */
 function aircraftProximityWindowForQuery(dataManager, args, result) {
+  // A follow-up refers to the earlier query snapshot, not today's Contacts
+  // window. Never replace its retained status/count with a fresh window read.
+  if (result?.coverage?.followUp) return null;
   const scope = args?.scope;
   if (String(scope?.kind || '').toLowerCase() !== 'radius') return null;
   const layers = Array.isArray(args.layers) ? args.layers : [];
@@ -3223,6 +3226,7 @@ function aircraftProximityWindowForQuery(dataManager, args, result) {
       followUp: false,
       note: 'Contacts window engine — the same computation and cohort the Contacts panel displays, so this count matches the panel exactly — counts cover loaded data; the flights layer loads by viewport.',
     },
+    observation: result.observation,
     // (D) The answer always says whose window it is and which engine produced it.
     window: {
       engine: 'contacts-window',
@@ -4205,6 +4209,16 @@ function analystProviders(
         ? mod.getAnalystRecords(requestedLimit) || []
         : mod.getAnalystRecords() || [];
     },
+    getLayerObservation(layerKey) {
+      // getAll supplies the lifecycle's normalized getStats(), including
+      // enabling/loading and manager-owned refresh errors. Raw module stats
+      // alone would silently miss those limitations. Never use render.show.
+      const enabled = dataManager.isEnabled(layerKey);
+      const stats = dataManager
+        .getAll?.()
+        .find((row) => row.id === layerKey)?.stats;
+      return { enabled, feedState: stats ? layerFeedState(stats) : null };
+    },
     resolveRegionRing,
     /**
      * The active Contacts subject, when there is one — the centre the operator
@@ -4374,6 +4388,7 @@ async function runAnalystQuery(
     items,
     summary: result.summary,
     coverage: result.coverage,
+    observation: result.observation,
     // The panel's own numbers, carried so the answer can match what the
     // operator is looking at regardless of how the model reads the note.
     // Flattened alongside the object so the count and its subject cannot be

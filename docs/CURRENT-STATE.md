@@ -24,6 +24,13 @@ static-message time; adsbdb enrichment carries no report time. See
 known gaps; `scripts/check-provenance-authority.mjs` (in `check:boundaries`)
 freezes the authority boundaries.
 
+I5a adds a layer-level observation receipt to successful analyst and voice
+queries: `observation.unobserved` identifies disabled or non-nominal layers
+without changing available records/counts. Follow-ups keep the original status
+snapshot; rendering visibility is not observation eligibility. This is not yet
+spatial coverage or freshness age. See [OBSERVATION-STATUS.md](OBSERVATION-STATUS.md)
+for the exact reasons, provider wiring, naming decision and limits.
+
 The canonical record index now has a production adapter.
 `buildCurrentRecordIndex` (`src/data/currentRecordIndex.js`) rebuilds it on
 demand from the Flights, Military Flights and AIS Vessels stores whose layers

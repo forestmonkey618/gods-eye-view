@@ -1284,6 +1284,7 @@
       "src/data/aisLiveVessels.js",
       "src/data/alprCameras.js",
       "src/data/analystEngine.js",
+      "src/data/observationStatus.js",
       "src/data/bikeshare.js",
       "src/data/cctv.js",
       "src/data/cctvCards.js",

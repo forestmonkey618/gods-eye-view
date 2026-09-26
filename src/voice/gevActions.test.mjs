@@ -2802,6 +2802,125 @@ test('a nested Cockpit rollback result is translated too', async () => {
 });
 
 
+/** A live voice runner with lifecycle eligibility separate from map rendering. */
+function observationVoiceHarness() {
+  globalThis.window = globalThis.window || { clearTimeout, setTimeout, requestIdleCallback: null };
+  const enabled = { flights: true, military: false };
+  const stats = {
+    flights: { count: 0, lastUpdate: 1 },
+    military: { count: 0, lastUpdate: null },
+  };
+  const records = { flights: [], military: [] };
+  const managerErrors = { flights: null, military: null };
+  let statsReads = 0;
+  let recordReads = 0;
+  const layers = new Map(['flights', 'military'].map((id) => [id, {
+    module: {
+      // The invisible map collection is intentionally NOT lifecycle state.
+      collection: { show: false },
+      getAnalystRecords() { recordReads++; return records[id]; },
+      getStats() { statsReads++; return stats[id]; },
+    },
+  }]));
+  const dataManager = {
+    layers,
+    isEnabled: (id) => enabled[id] === true,
+    getAll: () => [...layers].map(([id, entry]) => ({
+      id, enabled: enabled[id],
+      stats: { ...entry.module.getStats(), managerRefreshError: managerErrors[id] },
+    })),
+  };
+  const viewer = {
+    clock: { onTick: { addEventListener: () => () => {} } },
+    scene: { canvas: { addEventListener() {}, removeEventListener() {} } },
+    camera: { moveEnd: { addEventListener() {} } },
+  };
+  return {
+    run: createGevActionRunner({ viewer, styleManager: {}, dataManager }),
+    enabled, stats, records, managerErrors, layers,
+    reads: () => ({ stats: statsReads, records: recordReads }),
+  };
+}
+
+test('voice analyst: invisible but enabled + nominal is observed; disabled zero is not', async () => {
+  const harness = observationVoiceHarness();
+  const flights = await harness.run('analyst_query', {
+    layers: ['flights'], scope: { kind: 'anywhere' },
+  });
+  assert.equal(flights.count, 0);
+  assert.equal(harness.layers.get('flights').module.collection.show, false);
+  assert.deepEqual(flights.observation.unobserved, []);
+  assert.deepEqual(flights.coverage.layersQueried, [
+    { layerKey: 'flights', records: 0, enabled: true, feedState: 'nominal' },
+  ]);
+
+  const military = await harness.run('analyst_query', {
+    layers: ['military'], scope: { kind: 'anywhere' },
+  });
+  assert.equal(military.count, 0);
+  assert.deepEqual(military.observation.unobserved, [
+    { layerKey: 'military', reason: 'layer-disabled' },
+  ]);
+  assert.equal(harness.reads().records, 1, 'disabled layer records were not read');
+});
+
+test('voice analyst: normalized feed states qualify available records, including manager errors', async () => {
+  const harness = observationVoiceHarness();
+  harness.records.flights = [{ id: 'A', lat: 30, lon: -97 }];
+  for (const [stats, reason] of [
+    [{ count: 1, lastUpdate: 1, loading: true }, 'feed-loading'],
+    [{ count: 1, lastUpdate: 1, status: 'unavailable' }, 'feed-unavailable'],
+    [{ count: 1, lastUpdate: 1, stale: true }, 'feed-stale'],
+    [{ count: 1, lastUpdate: 1, degraded: true }, 'feed-degraded'],
+    [{ count: 1, lastUpdate: 1, partial: true }, 'feed-partial'],
+    [{ count: 1, lastUpdate: 1, fallback: true }, 'feed-fallback'],
+  ]) {
+    harness.stats.flights = stats;
+    const result = await harness.run('analyst_query', {
+      layers: ['flights'], scope: { kind: 'anywhere' },
+    });
+    assert.equal(result.count, 1, reason);
+    assert.deepEqual(result.items.map(({ id }) => id), ['A']);
+    assert.deepEqual(result.observation.unobserved, [{ layerKey: 'flights', reason }]);
+  }
+  // The module itself reports nominal, but a lifecycle-owned refresh failed.
+  // Raw module getStats() would conceal that failure; getAll() includes it.
+  harness.stats.flights = { count: 1, lastUpdate: 1 };
+  harness.managerErrors.flights = 'network rejected';
+  const degraded = await harness.run('analyst_query', {
+    layers: ['flights'], scope: { kind: 'anywhere' },
+  });
+  assert.equal(degraded.count, 1);
+  assert.deepEqual(degraded.observation.unobserved, [
+    { layerKey: 'flights', reason: 'feed-degraded' },
+  ]);
+});
+
+test('voice analyst: follow-up reports prior observation, without fresh lifecycle or record reads', async () => {
+  const harness = observationVoiceHarness();
+  harness.stats.flights = { count: 1, lastUpdate: 1, partial: true };
+  harness.records.flights = [{ id: 'A', lat: 30, lon: -97 }];
+  const first = await harness.run('analyst_query', {
+    layers: ['flights'], scope: { kind: 'anywhere' },
+  });
+  assert.equal(first.count, 1);
+  harness.enabled.flights = false;
+  harness.stats.flights = { count: 0, status: 'unavailable' };
+  harness.records.flights = [];
+  const before = harness.reads();
+  const followUp = await harness.run('analyst_query', {
+    followUp: true, scope: { kind: 'anywhere' },
+  });
+  assert.equal(followUp.count, 1);
+  assert.equal(followUp.coverage.followUp, true);
+  assert.deepEqual(followUp.coverage.layersQueried, first.coverage.layersQueried);
+  assert.deepEqual(followUp.observation, first.observation);
+  assert.deepEqual(followUp.observation.unobserved, [
+    { layerKey: 'flights', reason: 'feed-partial' },
+  ]);
+  assert.deepEqual(harness.reads(), before);
+});
+
 /**
  * Front 5 (owner's live trial, 2026-08-22 01:42-01:44). Contacts was active
  * with contact N546PC as its subject, a DATACENTER sat in the recency slot,
@@ -2900,8 +3019,34 @@ test('front5: a nearby ask centres on the Contacts SUBJECT, not the selected dat
     });
     assert.equal(subjectCentred.count, 116, 'the subject-centred count is the window cohort');
     assert.equal(subjectCentred.scopeLabel, 'within 250 km of N546PC');
+    assert.deepEqual(subjectCentred.observation.unobserved, [
+      { layerKey: 'military', reason: 'layer-disabled' },
+    ], 'the Contacts read-back must not drop the analyst observation snapshot');
     assert.equal(subjectCentred.window.engine, 'contacts-window');
     assert.equal(subjectCentred.window.centeredOn, 'N546PC');
+  });
+});
+
+test('voice analyst: a Contacts follow-up cannot replace the earlier query with a fresh window', async () => {
+  const harness = awarenessSubjectHarness({
+    subject: { id: 'a1b2c3', label: 'N546PC' },
+    flights: [{ id: 'F1', icao24: 'abc123' }],
+  });
+  await withAwareness(harness, async (awareness) => {
+    const runner = analystRunner(awareness);
+    const initial = await runner('analyst_query', {
+      layers: ['flights', 'military'], scope: { kind: 'anywhere' },
+    });
+    assert.equal(initial.count, 1);
+    harness.flights = []; // the CURRENT Contacts window changed after the query
+    const followUp = await runner('analyst_query', {
+      followUp: true, layers: ['flights', 'military'], scope: { kind: 'radius', km: 250 },
+    });
+    assert.equal(followUp.count, 1, 'only the original record set is re-filtered');
+    assert.equal(followUp.coverage.followUp, true);
+    assert.equal(followUp.window, undefined, 'a current Contacts window must not replace a follow-up');
+    assert.deepEqual(followUp.observation, initial.observation);
+    assert.deepEqual(followUp.coverage.layersQueried, initial.coverage.layersQueried);
   });
 });
 
