@@ -18,6 +18,7 @@
  *
  * Providers (injected — keeps the engine pure and node-testable):
  *   getRecords(layerKey) → Array<record>            (layer accessor snapshot)
+ *   getLayerObservation?(layerKey) → {enabled, feedState}  (settled lifecycle + normalized feed state)
  *   resolveRegionRing(name) → Promise<{ring, name}|null>  (NE pack / admin boundary)
  *   getViewContext() → {lat, lon, viewRadiusKm, bounds?}  (camera-derived)
  *
@@ -26,6 +27,10 @@
 
 import { surfaceM } from './geo.js';
 import { pointInRing } from './naturalEarthRegions.js';
+import {
+  assessLayerObservation,
+  unobservedLayers,
+} from './observationStatus.js';
 
 /** Layers the engine understands, with the fields queries may reference. */
 export const ANALYST_LAYERS = {
@@ -163,9 +168,11 @@ export function createAnalystEngine(providers) {
     // 1) Source records
     let records;
     let layersQueried;
+    let observation;
     if (layers === null) {
       records = lastResult.items.slice();
-      layersQueried = lastResult.coverage.layersQueried;
+      layersQueried = lastResult.layersQueried;
+      observation = lastResult.observation;
     } else {
       records = [];
       layersQueried = [];
@@ -177,12 +184,33 @@ export function createAnalystEngine(providers) {
           coverage: { layersQueried: [], scope: 'unsupported-layer' },
         };
       }
+      const assessments = [];
       for (const key of layers) {
         if (!ANALYST_LAYERS[key]) continue;
+        // Both accessors are synchronous: take the status beside the records,
+        // before any async scope resolution. A follow-up never calls either.
         const rows = providers.getRecords(key) || [];
-        layersQueried.push({ layerKey: key, records: rows.length });
+        const state = providers.getLayerObservation?.(key);
+        const assessment = assessLayerObservation({
+          layerKey: key,
+          enabled: state?.enabled,
+          feedState: state?.feedState,
+        });
+        assessments.push(assessment);
+        layersQueried.push(
+          Object.freeze({
+            layerKey: key,
+            records: rows.length,
+            enabled: assessment.enabled,
+            feedState: assessment.feedState,
+          }),
+        );
         for (const row of rows) records.push({ layerKey: key, ...row });
       }
+      layersQueried = Object.freeze(layersQueried);
+      observation = Object.freeze({
+        unobserved: unobservedLayers(assessments),
+      });
     }
 
     // 2) Spatial scope
@@ -295,13 +323,18 @@ export function createAnalystEngine(providers) {
         followUp: Boolean(spec.followUp && lastResult),
         note: 'client-side data only — answers cover what the enabled layers currently hold',
       },
+      // Layer observation status is separate from the existing scope/coverage
+      // block: it makes no claim about geographic footprint or completeness.
+      observation,
       // Surfaced so the narration can name the centre it measured from rather
       // than implying a view-centred answer.
       ...(resolvedScope?.centeredOn
         ? { centeredOn: resolvedScope.centeredOn }
         : {}),
     };
-    lastResult = { items, coverage: result.coverage };
+    // Retain the original, frozen status snapshot independently of caller edits
+    // to the presentation-oriented coverage block (e.g. voice adds a note).
+    lastResult = { items, layersQueried, observation };
     return result;
   }
 
