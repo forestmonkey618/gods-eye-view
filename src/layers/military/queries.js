@@ -919,7 +919,9 @@ export function createQueries({
 
     /**
      * Return current layer health/status for the HUD status chip.
-     * @returns {{count: number, lastUpdate: number|null, stale: boolean, error: string|null, status: number|null, retryInSec: number}}
+     * `observedAtMs`/`receivedAtMs` (I5b) are the snapshot's own clocks as the
+     * ingestion retained them — never derived from `lastUpdate`.
+     * @returns {{count: number, lastUpdate: number|null, stale: boolean, error: string|null, status: number|null, retryInSec: number, observedAtMs: number|null, receivedAtMs: number|null}}
      */
     getStats() {
       const retryInSec = flightState.feed._retryAt
@@ -931,6 +933,8 @@ export function createQueries({
       return {
         count: flightState.feed._count,
         lastUpdate: flightState.feed._lastUpdate,
+        observedAtMs: flightState.feed._observedAtMs ?? null,
+        receivedAtMs: flightState.feed._receivedAtMs ?? null,
         stale: flightState.feed._backoff,
         error: flightState.feed._lastError,
         status: flightState.feed._lastStatus,

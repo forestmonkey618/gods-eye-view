@@ -604,3 +604,53 @@ test('two contacts matching at the same strength resolve deterministically', () 
   assert.equal(first, 'aef001', 'the stable key (lowest hex) wins, not the feed order');
   assert.equal(second, first, 'and the same query resolves the same way every time');
 });
+
+test('I5b: military getStats separates the cached observation clock from the batch receipt', async (t) => {
+  _setTrackedMilitaryRefreshStateForTest({
+    icao24: 'zz9999',
+    entity: null,
+    meta: { rawLat: 31, rawLon: -97, onGround: false },
+    billboard: { position: Cesium.Cartesian3.fromDegrees(-97, 31, 8000), show: false },
+    billboardCollection: { show: true, remove() {}, add() { return {}; } },
+    viewer: {
+      camera: { positionCartographic: null },
+      scene: { primitives: { remove() {} } },
+      entities: { add: () => ({}), remove() {} },
+    },
+    tracked: false,
+  });
+  const receipt1 = 1_800_000_000_000;
+  let now = receipt1;
+  t.mock.method(Date, 'now', () => now);
+  let cache = 'MISS';
+  let ageMs = 0;
+  t.mock.method(globalThis, 'fetch', async () => Response.json({
+    ac: [{ hex: 'ae01ce', lon: -97, lat: 31, alt_baro: 28000,
+      track: 95, gs: 400, seen: 1, seen_pos: 2, flight: 'RCH451' }],
+  }, { headers: {
+    'X-ADS-B-Cache': cache,
+    ...(cache === 'MISS' ? {} : { 'X-ADS-B-Cache-Age-Ms': String(ageMs) }),
+  } }));
+  const viewer = {
+    camera: { positionCartographic: null },
+    scene: { primitives: { remove() {} } },
+    entities: { add: () => ({}), remove() {} },
+  };
+
+  // Fresh MISS: both clocks legitimately coincide at the fetch instant.
+  await militaryFlightsLayer.update(viewer);
+  assert.equal(militaryFlightsLayer.getStats().observedAtMs, receipt1);
+  assert.equal(militaryFlightsLayer.getStats().receivedAtMs, receipt1);
+  assert.equal(militaryFlightsLayer.getStats().lastUpdate, receipt1, 'lastUpdate unchanged');
+
+  // Later HIT of a 5 s-old cached snapshot: the observation time stays with
+  // the snapshot while the receipt clock is when THIS batch reached GEV.
+  // The clocks differ; neither substitutes for the other.
+  cache = 'HIT';
+  ageMs = 5_000;
+  now = receipt1 + 5_000;
+  await militaryFlightsLayer.update(viewer);
+  assert.equal(militaryFlightsLayer.getStats().observedAtMs, receipt1);
+  assert.equal(militaryFlightsLayer.getStats().receivedAtMs, receipt1 + 5_000);
+  assert.equal(militaryFlightsLayer.getStats().lastUpdate, receipt1, 'lastUpdate unchanged');
+});

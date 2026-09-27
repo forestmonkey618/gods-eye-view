@@ -1666,3 +1666,114 @@ test('vessel selection passes the opaque source reference to optional history', 
     aisLiveVesselsLayer.setSource(createAisStreamSource());
   }
 });
+
+test('I5b: AIS getStats exposes the snapshot clocks the source established', () => {
+  const clock = makeFakeAisRuntime(7000);
+  const record = makeRecord();
+  _setAisRuntimeForTest(clock.runtime);
+  _setVesselOverlayHostForTest({ setEntries() {}, setVisible() {}, clearSource() {} });
+  _setVesselStateForTest({ viewer: {}, records: [record] });
+  try {
+    _applyAisFeedSnapshotForTest({}, {
+      status: 'open',
+      lastMessageAt: 12,
+      rows: [{ mmsi: record.mmsi, name: record.name, lat: 51.93, lon: 4.05 }],
+      observedAtMs: 1_758_870_000_111,
+      receivedAtMs: 1_758_870_000_222,
+    });
+    const stats = aisLiveVesselsLayer.getStats();
+    assert.equal(stats.observedAtMs, 1_758_870_000_111);
+    assert.equal(stats.receivedAtMs, 1_758_870_000_222);
+    assert.equal(stats.lastUpdate, 1_758_870_000_111, 'lastUpdate keeps its existing meaning');
+  } finally {
+    _setVesselStateForTest({ enabled: false });
+    _setAisRuntimeForTest();
+  }
+});
+
+test('I5b: the AIS receipt-style lastUpdate fallback never becomes an observation clock', () => {
+  const clock = makeFakeAisRuntime(7000);
+  const record = makeRecord();
+  _setAisRuntimeForTest(clock.runtime);
+  _setVesselOverlayHostForTest({ setEntries() {}, setVisible() {}, clearSource() {} });
+  _setVesselStateForTest({ viewer: {}, records: [record] });
+  try {
+    // Legacy rows path: the observedAtMs key is absent entirely, so lastUpdate
+    // falls back to the receipt-style now() exactly as it always has.
+    _applyAisFeedSnapshotForTest({}, {
+      status: 'open',
+      lastMessageAt: 12,
+      rows: [{ mmsi: record.mmsi, name: record.name, lat: 51.93, lon: 4.05 }],
+    });
+    const stats = aisLiveVesselsLayer.getStats();
+    assert.equal(stats.lastUpdate, 7000, 'legacy fallback still stamps lastUpdate');
+    assert.equal(stats.observedAtMs, null, 'the fallback is never a source observation clock');
+    assert.equal(stats.receivedAtMs, null, 'and never a batch receipt clock either');
+  } finally {
+    _setVesselStateForTest({ enabled: false });
+    _setAisRuntimeForTest();
+  }
+});
+
+test('I5b: a null AIS observation clock stays null beside a truthful receipt', () => {
+  const clock = makeFakeAisRuntime(7000);
+  const record = makeRecord();
+  _setAisRuntimeForTest(clock.runtime);
+  _setVesselOverlayHostForTest({ setEntries() {}, setVisible() {}, clearSource() {} });
+  _setVesselStateForTest({ viewer: {}, records: [record] });
+  try {
+    _applyAisFeedSnapshotForTest({}, {
+      status: 'open',
+      lastMessageAt: 12,
+      rows: [{ mmsi: record.mmsi, name: record.name, lat: 51.93, lon: 4.05 }],
+      observedAtMs: null,
+      receivedAtMs: 1_758_870_000_222,
+    });
+    const stats = aisLiveVesselsLayer.getStats();
+    assert.equal(stats.lastUpdate, null, 'hasOwn + null keeps the legacy behavior');
+    assert.equal(stats.observedAtMs, null, 'no receipt substitution into the observation clock');
+    assert.equal(stats.receivedAtMs, 1_758_870_000_222);
+  } finally {
+    _setVesselStateForTest({ enabled: false });
+    _setAisRuntimeForTest();
+  }
+});
+
+test('I5b: the live loader forwards both source clocks into the feed', async () => {
+  const clock = makeFakeAisRuntime(7000);
+  const record = makeRecord();
+  _setAisRuntimeForTest(clock.runtime);
+  _setVesselOverlayHostForTest({ setEntries() {}, setVisible() {}, clearSource() {} });
+  _setVesselStateForTest({ records: [record] });
+  aisLiveVesselsLayer.setSource({
+    label: 'Test AIS',
+    async getSnapshot() {
+      return {
+        source: 'Test AIS',
+        records: [{
+          id: record.mmsi,
+          latitude: 51.93,
+          longitude: 4.05,
+          observedAtMs: 500,
+        }],
+        observedAtMs: 500,
+        receivedAtMs: 600,
+        transportStatus: 'open',
+        lastMessageAt: 12,
+        rawRowCount: 1,
+        complete: true,
+      };
+    },
+  });
+  try {
+    await _loadLivePositionsForTest({});
+    const stats = aisLiveVesselsLayer.getStats();
+    assert.equal(stats.observedAtMs, 500);
+    assert.equal(stats.receivedAtMs, 600);
+  } finally {
+    _setVesselStateForTest({ enabled: false });
+    _setAisRuntimeForTest();
+    const { createAisStreamSource } = await import('../sources/live/standalone.js');
+    aisLiveVesselsLayer.setSource(createAisStreamSource());
+  }
+});

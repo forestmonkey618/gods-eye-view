@@ -625,6 +625,10 @@ export function createQueries({
       return {
         count: state.feed.count,
         lastUpdate: state.feed.lastUpdate,
+        // I5b — the snapshot's own clocks as retained at ingest, never derived
+        // from lastUpdate (which may carry a receipt-style fallback value).
+        observedAtMs: state.feed.observedAtMs ?? null,
+        receivedAtMs: state.feed.receivedAtMs ?? null,
         loading: state.feed.loading || waitingForFirstPosition,
         loadingLabel: waitingForFirstPosition
           ? AIS_FIRST_CONNECT_LABEL

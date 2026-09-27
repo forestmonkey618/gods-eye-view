@@ -402,3 +402,39 @@ test('malformed earthquake refresh preserves entities, overlays, count and times
     layer.destroy(viewer);
   }
 });
+
+test('I5b: earthquake getStats declares no snapshot clocks — event times stay per-event', async () => {
+  const originalFetch = globalThis.fetch;
+  const dataSources = [];
+  const viewer = {
+    dataSources: {
+      add(dataSource) { dataSources.push(dataSource); return dataSource; },
+      remove() { return true; },
+    },
+  };
+  globalThis.fetch = async () => ({
+    ok: true,
+    json: async () => ({
+      features: [{
+        id: 'us-clock-1',
+        geometry: { coordinates: [-150.41, 61.02, 41.7] },
+        properties: { mag: 5.24, place: 'Clock One', time: 1_753_600_000_000 },
+      }],
+    }),
+  });
+  const layer = createEarthquakesLayer({
+    overlayHost: { setEntries() {}, setVisible() {}, clearSource() {} },
+  });
+  try {
+    layer.init(viewer);
+    layer.enable(viewer);
+    assert.equal(await layer.update(viewer), true);
+    const stats = layer.getStats();
+    assert.equal(stats.observedAtMs, null, 'event times stay per-event (I3), never a layer clock');
+    assert.equal(stats.receivedAtMs, null, 'no explicit batch receipt clock is established here');
+    assert.ok(Number.isFinite(stats.lastUpdate), 'lastUpdate keeps its existing meaning');
+  } finally {
+    globalThis.fetch = originalFetch;
+    layer.destroy(viewer);
+  }
+});

@@ -27,9 +27,14 @@ freezes the authority boundaries.
 I5a adds a layer-level observation receipt to successful analyst and voice
 queries: `observation.unobserved` identifies disabled or non-nominal layers
 without changing available records/counts. Follow-ups keep the original status
-snapshot; rendering visibility is not observation eligibility. This is not yet
-spatial coverage or freshness age. See [OBSERVATION-STATUS.md](OBSERVATION-STATUS.md)
-for the exact reasons, provider wiring, naming decision and limits.
+snapshot; rendering visibility is not observation eligibility. I5b adds
+observation currency to the same receipt: `observation.asOf` carries one
+`{layerKey, observedAtMs, receivedAtMs}` entry per queried layer — nullable
+snapshot clocks established by each layer's own ingestion, never derived from
+`lastUpdate`, never substituted for each other, never aged. This is not yet
+spatial coverage or freshness age. See
+[OBSERVATION-STATUS.md](OBSERVATION-STATUS.md)
+for the exact reasons, clock audit, provider wiring, naming decision and limits.
 
 The canonical record index now has a production adapter.
 `buildCurrentRecordIndex` (`src/data/currentRecordIndex.js`) rebuilds it on

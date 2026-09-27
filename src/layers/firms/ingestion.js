@@ -49,6 +49,14 @@ export function createIngestion({
       layerState._lastUpdate = Number.isFinite(payload?.fetchedAt)
         ? payload.fetchedAt
         : Date.now();
+      // I5b — the proxy fetch stamp is this batch's GEV ingest time when the
+      // transport carries it; without it there is no truthful receipt clock
+      // and unknown stays unknown (never lastUpdate's Date.now() fallback).
+      // FIRMS exposes no layer-level source observation clock — per-record
+      // acquisition times stay per-record — so observedAtMs is always null.
+      layerState._receivedAtMs = Number.isFinite(payload?.fetchedAt)
+        ? payload.fetchedAt
+        : null;
       // Settle the previous selection BEFORE the LOD rebuild. renderCurrentLod
       // runs refreshContextRegistrations(), which deletes every context record
       // not in the new top-N — including the one the store still points at.

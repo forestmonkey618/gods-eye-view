@@ -368,3 +368,46 @@ test('disable cancels a pending source and a late response cannot repopulate the
     assert.equal(h.layer.getStats().loading, false);
   } finally { h.layer.destroy(h.viewer); h.cleanup(); }
 });
+
+test('I5b: FIRMS exposes only a truthful receipt clock, never an observation clock', async () => {
+  const h = harness({ withDataSource: true });
+  const priorFetch = globalThis.fetch;
+  try {
+    // A proxy payload that carries its fetch stamp: the batch's GEV ingest.
+    globalThis.fetch = async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        fetchedAt: 1_758_870_000_444,
+        stale: false,
+        fires: [{
+          lat: 31.02, lon: -99.01, frp: 12.5, confidence: 'h',
+          brightness: 330, daynight: 'D', acqDate: '2025-07-27',
+          acqTime: '0412', instrument: 'VIIRS', satellite: 'N20',
+        }],
+      }),
+    });
+    await h.layer.update();
+    let stats = h.layer.getStats();
+    assert.equal(stats.observedAtMs, null, 'FIRMS has no layer-level source observation clock');
+    assert.equal(stats.receivedAtMs, 1_758_870_000_444, 'the proxy fetch stamp is the batch receipt');
+    assert.equal(stats.lastUpdate, 1_758_870_000_444, 'lastUpdate keeps its data-age semantics');
+
+    // No fetch stamp in the transport: unknown stays unknown — never
+    // lastUpdate's Date.now() fallback and never a fabricated receipt.
+    globalThis.fetch = async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({ stale: false, fires: [] }),
+    });
+    await h.layer.update();
+    stats = h.layer.getStats();
+    assert.equal(stats.observedAtMs, null);
+    assert.equal(stats.receivedAtMs, null);
+    assert.ok(Number.isFinite(stats.lastUpdate), 'legacy lastUpdate behavior is unchanged');
+  } finally {
+    if (priorFetch === undefined) delete globalThis.fetch;
+    else globalThis.fetch = priorFetch;
+    h.cleanup();
+  }
+});
