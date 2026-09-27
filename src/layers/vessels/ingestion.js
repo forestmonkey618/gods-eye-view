@@ -44,6 +44,7 @@ export function createIngestion({
       applyAisFeedSnapshot(viewer, {
         rows: snapshot.records.map(vesselDisplayRow),
         observedAtMs: snapshot.observedAtMs,
+        receivedAtMs: snapshot.receivedAtMs,
         freshness: snapshot.freshness,
         complete: snapshot.complete,
         rawRowCount: snapshot.rawRowCount,
@@ -145,6 +146,16 @@ export function createIngestion({
     feed.lastUpdate = Object.hasOwn(payload, 'observedAtMs')
       ? payload.observedAtMs
       : now();
+    // I5b — the snapshot's own clocks as facts, never lastUpdate's fallback.
+    // When the source-derived observation time is absent (legacy rows path),
+    // observedAtMs stays null even though lastUpdate carries a receipt-style
+    // value. The clocks never substitute for each other.
+    feed.observedAtMs = Number.isFinite(payload?.observedAtMs)
+      ? payload.observedAtMs
+      : null;
+    feed.receivedAtMs = Number.isFinite(payload?.receivedAtMs)
+      ? payload.receivedAtMs
+      : null;
     return { reconciled: true, ...snapshot };
   }
 
@@ -196,6 +207,10 @@ export function createVesselFeed() {
     error: null,
     loadingLabel: '',
     lastUpdate: null,
+    // I5b snapshot clocks: source-established observation time and GEV batch
+    // receipt. Separate fields, never derived from lastUpdate.
+    observedAtMs: null,
+    receivedAtMs: null,
     count: 0,
     newestPositionAt: null,
     transportStatus: null,

@@ -226,6 +226,12 @@ export function createEarthquakesLayer({ source, overlayHost } = {}) {
         count: _count,
         lastUpdate: _lastUpdate,
         error: _lastError,
+        // I5b — this layer establishes no snapshot-level clocks. USGS event
+        // times are per-event facts and stay at record grain (I3); the fetch
+        // completion stamp in lastUpdate is not a source observation clock or
+        // a preserved receipt clock. Unknown stays unknown.
+        observedAtMs: null,
+        receivedAtMs: null,
       };
     },
   };

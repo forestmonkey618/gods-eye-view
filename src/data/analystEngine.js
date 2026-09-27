@@ -18,7 +18,8 @@
  *
  * Providers (injected — keeps the engine pure and node-testable):
  *   getRecords(layerKey) → Array<record>            (layer accessor snapshot)
- *   getLayerObservation?(layerKey) → {enabled, feedState}  (settled lifecycle + normalized feed state)
+ *   getLayerObservation?(layerKey) → {enabled, feedState, observedAtMs?, receivedAtMs?}
+ *                                   (settled lifecycle + normalized feed state + I5b snapshot clocks)
  *   resolveRegionRing(name) → Promise<{ring, name}|null>  (NE pack / admin boundary)
  *   getViewContext() → {lat, lon, viewRadiusKm, bounds?}  (camera-derived)
  *
@@ -28,6 +29,7 @@
 import { surfaceM } from './geo.js';
 import { pointInRing } from './naturalEarthRegions.js';
 import {
+  assessLayerAsOf,
   assessLayerObservation,
   unobservedLayers,
 } from './observationStatus.js';
@@ -170,6 +172,9 @@ export function createAnalystEngine(providers) {
     let layersQueried;
     let observation;
     if (layers === null) {
+      // Follow-ups describe the ORIGINAL snapshot: its records, its I5a
+      // status, and its I5b as-of clocks pass through untouched — no provider
+      // reads, so a live feed change cannot rewrite the receipt's currency.
       records = lastResult.items.slice();
       layersQueried = lastResult.layersQueried;
       observation = lastResult.observation;
@@ -185,10 +190,12 @@ export function createAnalystEngine(providers) {
         };
       }
       const assessments = [];
+      const asOf = [];
       for (const key of layers) {
         if (!ANALYST_LAYERS[key]) continue;
-        // Both accessors are synchronous: take the status beside the records,
-        // before any async scope resolution. A follow-up never calls either.
+        // Both accessors are synchronous: take the status and the I5b snapshot
+        // clocks beside the records, before any async scope resolution. A
+        // follow-up never calls either.
         const rows = providers.getRecords(key) || [];
         const state = providers.getLayerObservation?.(key);
         const assessment = assessLayerObservation({
@@ -197,6 +204,15 @@ export function createAnalystEngine(providers) {
           feedState: state?.feedState,
         });
         assessments.push(assessment);
+        // I5b — exactly one as-of entry per queried layer, in query order,
+        // whatever the clocks' truthfulness: never omitted, never substituted.
+        asOf.push(
+          assessLayerAsOf({
+            layerKey: key,
+            observedAtMs: state?.observedAtMs,
+            receivedAtMs: state?.receivedAtMs,
+          }),
+        );
         layersQueried.push(
           Object.freeze({
             layerKey: key,
@@ -210,6 +226,7 @@ export function createAnalystEngine(providers) {
       layersQueried = Object.freeze(layersQueried);
       observation = Object.freeze({
         unobserved: unobservedLayers(assessments),
+        asOf: Object.freeze(asOf),
       });
     }
 
@@ -323,8 +340,9 @@ export function createAnalystEngine(providers) {
         followUp: Boolean(spec.followUp && lastResult),
         note: 'client-side data only — answers cover what the enabled layers currently hold',
       },
-      // Layer observation status is separate from the existing scope/coverage
-      // block: it makes no claim about geographic footprint or completeness.
+      // Layer observation status (I5a unobserved) and snapshot currency (I5b
+      // asOf) are separate from the existing scope/coverage block: they make
+      // no claim about geographic footprint or completeness.
       observation,
       // Surfaced so the narration can name the centre it measured from rather
       // than implying a view-centred answer.

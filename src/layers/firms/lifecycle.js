@@ -97,6 +97,7 @@ export function createLifecycle({
       layerState._count = 0;
       layerState._cellCount = 0;
       layerState._lastUpdate = null;
+      layerState._receivedAtMs = null;
       layerState._keyRequired = false;
       layerState._stale = false;
       layerState._error = null;

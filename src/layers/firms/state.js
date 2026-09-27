@@ -49,6 +49,9 @@ export function createFirmsState({ services, config }) {
 
   layerState._lastUpdate = null;
 
+  /** I5b batch receipt clock (GEV ingest of the applied payload), or null. */
+  layerState._receivedAtMs = null;
+
   layerState._currentLodId = null;
 
   layerState._currentLodIndex = -1;

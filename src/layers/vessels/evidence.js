@@ -27,6 +27,11 @@ export function createEvidence({
     state.feed.stale = false;
     state.feed.partial = false;
     state.feed.lastUpdate = Date.now();
+    // I5b — synthetic evidence rows carry no source-observation or batch
+    // receipt clock. Unknown stays unknown; the synthetic stamp above is not
+    // a snapshot clock and must never be propagated as one.
+    state.feed.observedAtMs = null;
+    state.feed.receivedAtMs = null;
     state.feed.transportStatus = 'synthetic';
     state.feed.lastMessageAt = null;
     state.feed.rawRowCount = Array.isArray(rows) ? rows.length : 0;

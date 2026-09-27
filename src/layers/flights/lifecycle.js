@@ -88,6 +88,8 @@ export function createLifecycle({
       flightState._groundSnap.clear();
       flightState.feed._count = 0;
       flightState.feed._lastUpdate = null;
+      flightState.feed._observedAtMs = null;
+      flightState.feed._receivedAtMs = null;
       flightState.feed._backoff = false;
       flightState.feed._retryAt = 0;
       flightState.feed._lastError = null;
@@ -322,6 +324,8 @@ export function createLifecycle({
       flightState._focusEvidenceIds.clear();
       flightState.feed._count = 0;
       flightState.feed._lastUpdate = null;
+      flightState.feed._observedAtMs = null;
+      flightState.feed._receivedAtMs = null;
       flightState._cockpitContactMode = false;
       flightState._cockpitNearContacts = new Set();
       flightState._cockpitSubjectId = null;

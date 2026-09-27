@@ -79,6 +79,12 @@ export function createQueries({
         count: layerState._count,
         cells: layerState._cellCount,
         lastUpdate: layerState._lastUpdate,
+        // I5b — FIRMS exposes no layer-level source observation clock
+        // (per-record acquisition times stay per-record), so observedAtMs is
+        // always null; receivedAtMs is the proxy's fetch stamp for the applied
+        // batch when it was carried. Never derived from lastUpdate above.
+        observedAtMs: null,
+        receivedAtMs: layerState._receivedAtMs ?? null,
         loading: layerState._loading,
         stale: layerState._stale,
         // The machine-readable half of the keyless state, ahead of the human

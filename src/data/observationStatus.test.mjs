@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { readFileSync } from 'node:fs';
 import {
+  assessLayerAsOf,
   assessLayerObservation,
   unobservedLayers,
 } from './observationStatus.js';
@@ -89,8 +90,90 @@ test('observation authority is a deterministic leaf with no clock, network, DOM 
     const input = { layerKey: 'flights', enabled: true, feedState: 'fallback' };
     assert.deepEqual(fresh.assessLayerObservation(input), fresh.assessLayerObservation(input));
     assert.deepEqual(input, { layerKey: 'flights', enabled: true, feedState: 'fallback' });
+    const asOfInput = {
+      layerKey: 'flights',
+      observedAtMs: 1_758_870_000_123,
+      receivedAtMs: 1_758_870_000_456,
+    };
+    assert.deepEqual(fresh.assessLayerAsOf(asOfInput), fresh.assessLayerAsOf(asOfInput));
+    assert.deepEqual(asOfInput, {
+      layerKey: 'flights',
+      observedAtMs: 1_758_870_000_123,
+      receivedAtMs: 1_758_870_000_456,
+    });
   } finally {
     Date.now = originalNow;
     globalThis.fetch = originalFetch;
   }
+});
+
+test('I5b: valid snapshot clocks are preserved exactly, entry frozen', () => {
+  const entry = assessLayerAsOf({
+    layerKey: 'ais-live-vessels',
+    observedAtMs: 1_758_870_000_123,
+    receivedAtMs: 1_758_870_000_456,
+  });
+  assert.deepEqual(entry, {
+    layerKey: 'ais-live-vessels',
+    observedAtMs: 1_758_870_000_123,
+    receivedAtMs: 1_758_870_000_456,
+  });
+  assert.equal(Object.isFrozen(entry), true);
+  // Any finite number the layer established is preserved exactly; trust is
+  // established by the ingestion that stamped it, not judged here.
+  assert.equal(assessLayerAsOf({ observedAtMs: 0 }).observedAtMs, 0);
+  assert.equal(assessLayerAsOf({ observedAtMs: 12.5 }).observedAtMs, 12.5);
+});
+
+test('I5b: missing, non-finite, or untrusted clock values become null and stay null', () => {
+  for (const bad of [
+    undefined,
+    null,
+    NaN,
+    Infinity,
+    -Infinity,
+    '123',
+    '2026-09-26T12:00:00Z',
+    true,
+    {},
+    [],
+    new Date(),
+  ]) {
+    assert.equal(
+      assessLayerAsOf({ layerKey: 'x', observedAtMs: bad, receivedAtMs: bad }).observedAtMs,
+      null,
+      `observedAtMs input ${String(bad)} must normalize to null`,
+    );
+    assert.equal(
+      assessLayerAsOf({ layerKey: 'x', observedAtMs: bad, receivedAtMs: bad }).receivedAtMs,
+      null,
+      `receivedAtMs input ${String(bad)} must normalize to null`,
+    );
+  }
+  assert.deepEqual(assessLayerAsOf({ layerKey: 'x' }), {
+    layerKey: 'x',
+    observedAtMs: null,
+    receivedAtMs: null,
+  });
+});
+
+test('I5b: the two clocks never substitute for each other', () => {
+  assert.deepEqual(
+    assessLayerAsOf({ layerKey: 'local-firms', observedAtMs: null, receivedAtMs: 555 }),
+    { layerKey: 'local-firms', observedAtMs: null, receivedAtMs: 555 },
+  );
+  assert.deepEqual(
+    assessLayerAsOf({ layerKey: 'flights', observedAtMs: 555, receivedAtMs: null }),
+    { layerKey: 'flights', observedAtMs: 555, receivedAtMs: null },
+  );
+  // A known receipt never back-fills a missing observation clock…
+  assert.equal(
+    assessLayerAsOf({ observedAtMs: null, receivedAtMs: 555 }).observedAtMs,
+    null,
+  );
+  // …and a known observation time never back-fills a missing receipt.
+  assert.equal(
+    assessLayerAsOf({ observedAtMs: 555 }).receivedAtMs,
+    null,
+  );
 });

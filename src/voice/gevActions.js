@@ -4217,7 +4217,16 @@ function analystProviders(
       const stats = dataManager
         .getAll?.()
         .find((row) => row.id === layerKey)?.stats;
-      return { enabled, feedState: stats ? layerFeedState(stats) : null };
+      return {
+        enabled,
+        feedState: stats ? layerFeedState(stats) : null,
+        // I5b — only the layer's own snapshot-clock fields, as its ingestion
+        // established them. Never stats.lastUpdate: its meaning varies per
+        // layer and it is not a clock authority (docs/OBSERVATION-STATUS.md).
+        // Absent/invalid values surface as null and stay null upstream.
+        observedAtMs: stats?.observedAtMs ?? null,
+        receivedAtMs: stats?.receivedAtMs ?? null,
+      };
     },
     resolveRegionRing,
     /**

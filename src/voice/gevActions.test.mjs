@@ -2921,6 +2921,41 @@ test('voice analyst: follow-up reports prior observation, without fresh lifecycl
   assert.deepEqual(harness.reads(), before);
 });
 
+test('voice analyst I5b: asOf carries only the layers\' own snapshot clocks — never lastUpdate', async () => {
+  const harness = observationVoiceHarness();
+  // Both clocks known — beside a poisoned lastUpdate that must never be read.
+  harness.stats.flights = {
+    count: 1,
+    lastUpdate: 1_758_870_000_999,
+    observedAtMs: 1_758_870_000_111,
+    receivedAtMs: 1_758_870_000_222,
+  };
+  harness.records.flights = [{ id: 'A', lat: 30, lon: -97 }];
+  // A disabled layer still keeps its entry and its truthful clocks.
+  harness.stats.military = {
+    count: 0,
+    lastUpdate: 1_758_870_000_888,
+    observedAtMs: 1_758_870_000_333,
+    receivedAtMs: null,
+  };
+  const result = await harness.run('analyst_query', {
+    layers: ['flights', 'military'], scope: { kind: 'anywhere' },
+  });
+  assert.deepEqual(result.observation.asOf, [
+    { layerKey: 'flights', observedAtMs: 1_758_870_000_111, receivedAtMs: 1_758_870_000_222 },
+    { layerKey: 'military', observedAtMs: 1_758_870_000_333, receivedAtMs: null },
+  ]);
+
+  // Clock keys absent: nulls reach the receipt — never derived from lastUpdate.
+  harness.stats.flights = { count: 0, lastUpdate: 1_758_870_000_999 };
+  const missing = await harness.run('analyst_query', {
+    layers: ['flights'], scope: { kind: 'anywhere' },
+  });
+  assert.deepEqual(missing.observation.asOf, [
+    { layerKey: 'flights', observedAtMs: null, receivedAtMs: null },
+  ]);
+});
+
 /**
  * Front 5 (owner's live trial, 2026-08-22 01:42-01:44). Contacts was active
  * with contact N546PC as its subject, a DATACENTER sat in the recency slot,
@@ -3022,6 +3057,12 @@ test('front5: a nearby ask centres on the Contacts SUBJECT, not the selected dat
     assert.deepEqual(subjectCentred.observation.unobserved, [
       { layerKey: 'military', reason: 'layer-disabled' },
     ], 'the Contacts read-back must not drop the analyst observation snapshot');
+    // I5b — the Contacts window forwards the COMPLETE original receipt,
+    // including its asOf clocks, never a rebuilt or newer snapshot.
+    assert.deepEqual(subjectCentred.observation.asOf, [
+      { layerKey: 'flights', observedAtMs: null, receivedAtMs: null },
+      { layerKey: 'military', observedAtMs: null, receivedAtMs: null },
+    ], 'the Contacts read-back must forward the complete observation receipt, asOf included');
     assert.equal(subjectCentred.window.engine, 'contacts-window');
     assert.equal(subjectCentred.window.centeredOn, 'N546PC');
   });

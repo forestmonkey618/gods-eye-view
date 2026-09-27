@@ -104,6 +104,8 @@ export function createLifecycle({
     state.feed.error = null;
     state.feed.loadingLabel = '';
     state.feed.lastUpdate = null;
+    state.feed.observedAtMs = null;
+    state.feed.receivedAtMs = null;
     state.feed.count = 0;
     state.feed.newestPositionAt = null;
     state.feed.transportStatus = null;

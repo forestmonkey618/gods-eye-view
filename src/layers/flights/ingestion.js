@@ -54,6 +54,15 @@ export function createIngestion({
         // Freshness belongs to the source snapshot, not the moment this browser
         // received a cached 200 response.
         feed._lastUpdate = sourceEpochMs;
+        // I5b: retain the snapshot's own clocks so the observation receipt never
+        // reads lastUpdate (its meaning varies per layer). Unknown stays
+        // unknown: a missing clock is retained as null, never substituted.
+        feed._observedAtMs = Number.isFinite(snapshot.observedAtMs)
+          ? snapshot.observedAtMs
+          : null;
+        feed._receivedAtMs = Number.isFinite(snapshot.receivedAtMs)
+          ? snapshot.receivedAtMs
+          : null;
         feed._lastTrackingRefreshOutcome = {
           epoch: trackingRefreshEpoch,
           status: 'accepted',
@@ -93,6 +102,9 @@ export function createFlightFeed(source) {
   feed._source = source;
   feed._count = 0;
   feed._lastUpdate = null;
+  // I5b snapshot clocks, retained beside (never derived from) lastUpdate.
+  feed._observedAtMs = null;
+  feed._receivedAtMs = null;
   feed._backoff = false;
   feed._retryAt = 0;
   feed._lastError = null;

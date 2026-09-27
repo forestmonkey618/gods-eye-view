@@ -1464,3 +1464,97 @@ test('display floor: two contacts on the same cell get their own outputs', () =>
   assert.notEqual(a, b, 'a shared scratch would hand both contacts the same object');
   assert.ok(Math.abs(_floorCarto(a).height - _floorCarto(b).height) < 0.05);
 });
+
+test('I5b: flights expose the snapshot clocks beside an unchanged lastUpdate', async (t) => {
+  // Reset the singleton to an untracked state first: earlier fixtures leave a
+  // pending share-Follow restore that can re-arm tracking mid-test.
+  _setTrackedFlightRefreshStateForTest({
+    icao24: 'zz9999',
+    entity: null,
+    meta: { rawLat: 30.2, rawLon: -97.7, onGround: false },
+    billboard: { position: Cesium.Cartesian3.fromDegrees(-97.66, 30.2, 9_000), show: false },
+    billboardCollection: { show: true, remove() {} },
+    viewer: {
+      camera: { positionCartographic: null },
+      scene: { primitives: { remove() {} } },
+      entities: { add: () => ({}), remove() {} },
+    },
+    tracked: false,
+  });
+  const receiptNow = 1_800_000_000_500;
+  const observedSec = 1_800_000_000; // 500 ms older than the batch receipt
+  t.mock.method(Date, 'now', () => receiptNow);
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async (url) => {
+    if (!String(url).startsWith('/api/opensky')) {
+      return { ok: true, status: 200, json: async () => ({ ac: [] }) };
+    }
+    return {
+      ok: true,
+      status: 200,
+      headers: { get: () => null },
+      json: async () => ({ time: observedSec, states: [] }),
+    };
+  };
+  try {
+    await flightsLayer.update({
+      camera: { positionCartographic: null },
+      scene: { primitives: { remove() {} } },
+      entities: { add: () => ({}), remove() {} },
+    });
+    const stats = flightsLayer.getStats();
+    // observedAtMs is the OpenSky snapshot time — never the receipt moment.
+    assert.equal(stats.observedAtMs, observedSec * 1000);
+    // receivedAtMs is this batch's receipt, explicitly known by the adapter.
+    assert.equal(stats.receivedAtMs, receiptNow);
+    // lastUpdate keeps its existing meaning and value: the source snapshot.
+    assert.equal(stats.lastUpdate, observedSec * 1000);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
+test('I5b: a flights batch without source time keeps a truthful receipt and a null observation clock', async (t) => {
+  _setTrackedFlightRefreshStateForTest({
+    icao24: 'zz9999',
+    entity: null,
+    meta: { rawLat: 30.2, rawLon: -97.7, onGround: false },
+    billboard: { position: Cesium.Cartesian3.fromDegrees(-97.66, 30.2, 9_000), show: false },
+    billboardCollection: { show: true, remove() {} },
+    viewer: {
+      camera: { positionCartographic: null },
+      scene: { primitives: { remove() {} } },
+      entities: { add: () => ({}), remove() {} },
+    },
+    tracked: false,
+  });
+  const receiptNow = 1_800_000_001_000;
+  t.mock.method(Date, 'now', () => receiptNow);
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async (url) => {
+    if (!String(url).startsWith('/api/opensky')) {
+      return { ok: true, status: 200, json: async () => ({ ac: [] }) };
+    }
+    return {
+      ok: true,
+      status: 200,
+      headers: { get: () => null },
+      json: async () => ({ time: null, states: [] }),
+    };
+  };
+  try {
+    await flightsLayer.update({
+      camera: { positionCartographic: null },
+      scene: { primitives: { remove() {} } },
+      entities: { add: () => ({}), remove() {} },
+    });
+    const stats = flightsLayer.getStats();
+    // Unknown stays unknown: no receipt substitution into the observation
+    // clock, and the receipt clock itself remains the truthful batch receipt.
+    assert.equal(stats.observedAtMs, null);
+    assert.equal(stats.receivedAtMs, receiptNow);
+    assert.equal(stats.lastUpdate, null, 'existing lastUpdate semantics unchanged');
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
